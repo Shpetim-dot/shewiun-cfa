@@ -19,7 +19,10 @@ from pydantic import BaseModel, Field
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
-DB_PATH = Path(os.getenv("CFA_DATABASE_PATH", "./data/cfa.db"))
+# Vercel functions run from a read-only deployment bundle. /tmp is writable but ephemeral;
+# use a managed database via CFA_DATABASE_PATH for durable production data.
+DEFAULT_DB_PATH = "/tmp/cfa.db" if os.getenv("VERCEL") else "./data/cfa.db"
+DB_PATH = Path(os.getenv("CFA_DATABASE_PATH", DEFAULT_DB_PATH))
 if not DB_PATH.is_absolute():
     DB_PATH = ROOT / DB_PATH
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
