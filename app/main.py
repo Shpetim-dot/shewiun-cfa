@@ -19,11 +19,17 @@ from pydantic import BaseModel, Field
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
-# Vercel's deployment bundle is read-only. A relative CFA_DATABASE_PATH such as
-# "./data/cfa.db" must not override the writable /tmp fallback on Vercel.
+# Vercel's deployment bundle is read-only. Use /tmp there even if VERCEL
+# is not populated in the function runtime or CFA_DATABASE_PATH points into the bundle.
+IS_VERCEL = bool(
+    os.getenv("VERCEL")
+    or os.getenv("VERCEL_ENV")
+    or os.getenv("VERCEL_URL")
+    or str(ROOT).startswith("/var/task")
+)
 configured_db_path = os.getenv("CFA_DATABASE_PATH")
-if os.getenv("VERCEL"):
-    DB_PATH = Path(configured_db_path) if configured_db_path and Path(configured_db_path).is_absolute() else Path("/tmp/cfa.db")
+if IS_VERCEL:
+    DB_PATH = Path("/tmp/cfa.db")
 else:
     DB_PATH = Path(configured_db_path or "./data/cfa.db")
 if not DB_PATH.is_absolute():
