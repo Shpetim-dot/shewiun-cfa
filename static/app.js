@@ -36,3 +36,53 @@ async function refreshApprovals(){
 }
 $("#refresh-approvals")?.addEventListener("click",refreshApprovals);
 $("#verify-audit")?.addEventListener("click",async()=>{try{const result=await api("/api/security/audit/verify");$("#audit-integrity").textContent=result.valid?"Integrity valid · "+result.checked+" events checked":"Integrity check failed at event "+result.failed_event_id;$("#audit-integrity").className="integrity-line "+(result.valid?"valid":"invalid");}catch(e){toast(e.message)}});
+
+
+// Conversation-first workspace composer
+const workspaceForm = $("#workspace-form");
+const workspacePrompt = $("#workspace-prompt");
+const workspaceResponse = $("#workspace-response");
+$$("[data-prompt]").forEach(button => button.addEventListener("click", () => {
+  workspacePrompt.value = button.dataset.prompt || "";
+  workspacePrompt.focus();
+}));
+workspaceForm?.addEventListener("submit", async event => {
+  event.preventDefault();
+  const topic = workspacePrompt.value.trim();
+  if (topic.length < 3) {
+    toast("Add a little more detail before starting.");
+    workspacePrompt.focus();
+    return;
+  }
+  const send = $("#workspace-send");
+  send.disabled = true;
+  send.innerHTML = "Working…";
+  workspaceResponse.hidden = false;
+  workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="composer-mark">✳</span><b>CFA Council is working</b><small>PROCESSING</small></div><p class="workspace-user-prompt"></p><div class="workspace-answer"><p>Gathering perspectives and preparing a synthesis…</p></div>';
+  workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
+  try {
+    const council = await api("/api/council", {
+      method: "POST",
+      body: JSON.stringify({topic, roles:["Strategist","Skeptic","Builder"], rounds:1})
+    });
+    const transcript = Array.isArray(council.transcript) ? council.transcript : [];
+    workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="composer-mark">✳</span><b>CFA Council</b><small>' + esc(council.mode || "demo") + ' mode</small></div><p class="workspace-user-prompt"></p>' +
+      transcript.map(message => '<article class="workspace-answer ' + (message.role === "Synthesizer" ? "response-synthesis" : "") + '"><b>' + esc(message.role) + (message.role === "Synthesizer" ? ' · Recommendation' : '') + '</b><p>' + esc(message.content) + '</p></article>').join("");
+    workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
+    workspacePrompt.value = "";
+    await refresh();
+    toast("Council session completed");
+  } catch (error) {
+    workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="composer-mark">!</span><b>Could not complete the request</b></div><p class="response-error"></p>';
+    workspaceResponse.querySelector(".response-error").textContent = error.message || "Unexpected error. Try again.";
+  } finally {
+    send.disabled = false;
+    send.innerHTML = 'Start working <span>↑</span>';
+  }
+});
+workspacePrompt?.addEventListener("keydown", event => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    workspaceForm.requestSubmit();
+  }
+});
