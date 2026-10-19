@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
@@ -66,6 +67,18 @@ def init_db() -> None:
           risk_level TEXT NOT NULL, status TEXT NOT NULL, decision_by TEXT, decision_note TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL, decided_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS runtime_runs (
+          id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, input_json TEXT NOT NULL,
+          state_json TEXT NOT NULL, result_json TEXT, error TEXT, attempt INTEGER NOT NULL DEFAULT 0,
+          max_attempts INTEGER NOT NULL DEFAULT 3, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          started_at TEXT, finished_at TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_runtime_runs_status_created ON runtime_runs(status, created_at);
+        CREATE TABLE IF NOT EXISTS runtime_events (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, event_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL, created_at TEXT NOT NULL,
+          FOREIGN KEY(run_id) REFERENCES runtime_runs(id)
+        );
         """)
         if db.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0:
             db.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?)", (
@@ -85,9 +98,29 @@ def init_db() -> None:
                        (str(uuid4()), "Workspace initialized", "CFA local workspace is ready.", now()))
 
 
+_runtime_worker_task: asyncio.Task | None = None
+
+
 @app.on_event("startup")
-def startup() -> None:
+async def startup() -> None:
+    global _runtime_worker_task
     init_db()
+    # Single-process SQLite MVP: recover interrupted runs after restart.
+    with connect() as db:
+        db.execute("UPDATE runtime_runs SET status='queued', updated_at=?, error=NULL WHERE status='running'", (now(),))
+    _runtime_worker_task = asyncio.create_task(runtime_worker())
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    global _runtime_worker_task
+    if _runtime_worker_task:
+        _runtime_worker_task.cancel()
+        try:
+            await _runtime_worker_task
+        except asyncio.CancelledError:
+            pass
+        _runtime_worker_task = None
 
 
 def append_audit(event_type: str, actor: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -402,3 +435,170 @@ def decide_approval(approval_id: str, item: ApprovalDecisionIn) -> dict[str, Any
 @app.get("/api/security/audit/verify")
 def audit_verify() -> dict[str, Any]:
     return verify_audit_chain()
+
+# --- CFA Agent Runtime: durable queue, per-speaker checkpoints, bounded retries ---
+
+RUNTIME_ROLES = ("Strategist", "Skeptic", "Builder", "Synthesizer")
+_RUNTIME_POLL_SECONDS = 0.75
+
+def _runtime_event(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    with connect() as db:
+        db.execute("INSERT INTO runtime_events (run_id,event_type,payload_json,created_at) VALUES (?,?,?,?)",
+                   (run_id, event_type, json.dumps(payload, ensure_ascii=False), now()))
+
+def _runtime_run(row: sqlite3.Row, include_state: bool = True) -> dict[str, Any]:
+    item = dict(row)
+    item["input"] = json.loads(item.pop("input_json"))
+    state = json.loads(item.pop("state_json"))
+    if include_state:
+        item["state"] = state
+    item["result"] = json.loads(item.pop("result_json")) if item.get("result_json") else None
+    item["cancel_requested"] = bool(item["cancel_requested"])
+    return item
+
+async def _execute_runtime_run(run_id: str) -> None:
+    with connect() as db:
+        row = db.execute("SELECT * FROM runtime_runs WHERE id=?", (run_id,)).fetchone()
+    if not row or row["status"] != "running":
+        return
+    item = _runtime_run(row)
+    request, state = item["input"], item["state"]
+    roles, transcript = state["roles"], state["transcript"]
+    live = bool(os.getenv("CFA_MODEL_API_KEY"))
+    try:
+        while state["next_index"] < len(roles):
+            with connect() as db:
+                current = db.execute("SELECT status,cancel_requested FROM runtime_runs WHERE id=?", (run_id,)).fetchone()
+            if not current or current["cancel_requested"] or current["status"] == "cancelled":
+                with connect() as db:
+                    db.execute("UPDATE runtime_runs SET status='cancelled',updated_at=?,finished_at=? WHERE id=?", (now(), now(), run_id))
+                _runtime_event(run_id, "run.cancelled", {"completed_steps": len(transcript)})
+                return
+            role = roles[state["next_index"]]
+            context = "\\n".join(f"{m['role']}: {m['content']}" for m in transcript)
+            reply = await model_reply(role, request["topic"], context) if live else None
+            if reply is None:
+                reply = demo_reply(role, request["topic"], context)
+            transcript.append({"role": role, "content": reply, "step": state["next_index"]})
+            state["next_index"] += 1
+            state["transcript"] = transcript
+            # Persist after every completed speaker; restart resumes from next_index.
+            with connect() as db:
+                db.execute("UPDATE runtime_runs SET state_json=?,updated_at=? WHERE id=? AND status='running'",
+                           (json.dumps(state, ensure_ascii=False), now(), run_id))
+            _runtime_event(run_id, "step.completed", {"index": state["next_index"] - 1, "role": role})
+        result = next((m["content"] for m in reversed(transcript) if m["role"] == "Synthesizer"),
+                      transcript[-1]["content"] if transcript else "")
+        result_record = {"topic": request["topic"], "result": result, "transcript": transcript,
+                         "mode": "live" if live else "demo"}
+        with connect() as db:
+            db.execute("UPDATE runtime_runs SET status='completed',result_json=?,updated_at=?,finished_at=?,error=NULL WHERE id=? AND status='running'",
+                       (json.dumps(result_record, ensure_ascii=False), now(), now(), run_id))
+            db.execute("INSERT INTO council VALUES (?, ?, ?, ?, ?, ?)",
+                       (run_id, request["topic"], result, json.dumps(transcript, ensure_ascii=False), result_record["mode"], now()))
+        _runtime_event(run_id, "run.completed", {"mode": result_record["mode"], "steps": len(transcript)})
+        log("Council runtime completed", request["topic"][:180])
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        with connect() as db:
+            row = db.execute("SELECT attempt,max_attempts FROM runtime_runs WHERE id=?", (run_id,)).fetchone()
+            if row and row["attempt"] < row["max_attempts"]:
+                db.execute("UPDATE runtime_runs SET status='queued',attempt=attempt+1,error=?,updated_at=? WHERE id=?",
+                           (str(exc)[:1000], now(), run_id))
+                event_type = "run.retry_scheduled"
+            else:
+                db.execute("UPDATE runtime_runs SET status='failed',error=?,updated_at=?,finished_at=? WHERE id=?",
+                           (str(exc)[:1000], now(), now(), run_id))
+                event_type = "run.failed"
+        _runtime_event(run_id, event_type, {"error": str(exc)[:500]})
+        if event_type == "run.failed":
+            log("Council runtime failed", f"{run_id}: {str(exc)[:120]}")
+
+async def runtime_worker() -> None:
+    # SQLite runtime intentionally supports one app worker process at a time.
+    while True:
+        run_id = None
+        with connect() as db:
+            row = db.execute("SELECT id FROM runtime_runs WHERE status='queued' ORDER BY created_at ASC LIMIT 1").fetchone()
+            if row:
+                run_id = row["id"]
+                changed = db.execute("UPDATE runtime_runs SET status='running',attempt=attempt+1,started_at=COALESCE(started_at,?),updated_at=? WHERE id=? AND status='queued'",
+                                     (now(), now(), run_id)).rowcount
+                if not changed:
+                    run_id = None
+        if run_id:
+            _runtime_event(run_id, "run.started", {})
+            await _execute_runtime_run(run_id)
+        else:
+            await asyncio.sleep(_RUNTIME_POLL_SECONDS)
+
+class RuntimeCouncilIn(BaseModel):
+    topic: str = Field(min_length=3, max_length=4000)
+    roles: list[str] = Field(default_factory=lambda: ["Strategist", "Skeptic", "Builder"])
+    rounds: int = Field(default=1, ge=1, le=2)
+    max_attempts: int = Field(default=3, ge=1, le=5)
+
+@app.post("/api/runtime/runs", status_code=202)
+def create_runtime_run(item: RuntimeCouncilIn) -> dict[str, Any]:
+    roles = [role for role in item.roles if role in {"Strategist", "Skeptic", "Builder"}]
+    if not roles:
+        roles = ["Strategist", "Skeptic", "Builder"]
+    if "Synthesizer" not in roles:
+        roles.append("Synthesizer")
+    expanded_roles = roles * item.rounds
+    run_id, timestamp = str(uuid4()), now()
+    request = {"topic": item.topic.strip(), "roles": roles, "rounds": item.rounds}
+    state = {"roles": expanded_roles, "next_index": 0, "transcript": []}
+    with connect() as db:
+        db.execute("INSERT INTO runtime_runs (id,kind,status,input_json,state_json,attempt,max_attempts,created_at,updated_at) VALUES (?,?,?,?,?,0,?,?,?)",
+                   (run_id, "council", "queued", json.dumps(request, ensure_ascii=False), json.dumps(state, ensure_ascii=False), item.max_attempts, timestamp, timestamp))
+    _runtime_event(run_id, "run.queued", {"kind": "council", "steps": len(expanded_roles)})
+    append_audit("runtime.run.queued", "workspace-owner", {"run_id": run_id, "kind": "council"})
+    return {"id": run_id, "kind": "council", "status": "queued", "created_at": timestamp, "poll_url": f"/api/runtime/runs/{run_id}"}
+
+@app.get("/api/runtime/runs")
+def list_runtime_runs(limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
+    limit = max(1, min(limit, 200))
+    with connect() as db:
+        if status:
+            rows = db.execute("SELECT * FROM runtime_runs WHERE status=? ORDER BY created_at DESC LIMIT ?", (status, limit)).fetchall()
+        else:
+            rows = db.execute("SELECT * FROM runtime_runs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    return [_runtime_run(row) for row in rows]
+
+@app.get("/api/runtime/runs/{run_id}")
+def get_runtime_run(run_id: str) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute("SELECT * FROM runtime_runs WHERE id=?", (run_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Runtime run not found")
+        events = db.execute("SELECT event_type,payload_json,created_at FROM runtime_events WHERE run_id=? ORDER BY seq", (run_id,)).fetchall()
+    result = _runtime_run(row)
+    result["events"] = [{**dict(e), "payload": json.loads(e["payload_json"])} for e in events]
+    return result
+
+@app.post("/api/runtime/runs/{run_id}/retry", status_code=202)
+def retry_runtime_run(run_id: str) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute("SELECT * FROM runtime_runs WHERE id=?", (run_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Runtime run not found")
+        if row["status"] not in {"failed", "cancelled"}:
+            raise HTTPException(status_code=409, detail="Only failed or cancelled runs can be retried")
+        state = json.loads(row["state_json"])
+        db.execute("UPDATE runtime_runs SET status='queued',error=NULL,finished_at=NULL,cancel_requested=0,updated_at=? WHERE id=?", (now(), run_id))
+    _runtime_event(run_id, "run.requeued", {"resume_from_step": state["next_index"]})
+    return {"id": run_id, "status": "queued", "resume_from_step": state["next_index"]}
+
+@app.post("/api/runtime/runs/{run_id}/cancel")
+def cancel_runtime_run(run_id: str) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute("SELECT status FROM runtime_runs WHERE id=?", (run_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Runtime run not found")
+        if row["status"] in {"completed", "failed", "cancelled"}:
+            raise HTTPException(status_code=409, detail="Run is already terminal")
+        db.execute("UPDATE runtime_runs SET cancel_requested=1,updated_at=? WHERE id=?", (now(), run_id))
+    _runtime_event(run_id, "run.cancel_requested", {})
+    return {"id": run_id, "status": "cancellation_requested"}
