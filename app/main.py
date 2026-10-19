@@ -16,24 +16,6 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from __future__ import annotations
-
-import asyncio
-import json
-import os
-import sqlite3
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
-from uuid import uuid4
-
-import httpx
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
-
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
