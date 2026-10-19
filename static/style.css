@@ -181,3 +181,17 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 @media(prefers-reduced-motion:reduce){
  *,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}
 }
+
+
+/* Durable run progress and agent transcript */
+.runtime-progress{margin:15px 0 18px;padding:13px 14px;border:1px solid #e3e8f1;border-radius:11px;background:#f8faff}
+.runtime-progress-top{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#59677f;font-size:11px}
+.runtime-progress-top b{color:#344766;font-variant-numeric:tabular-nums}
+.runtime-progress-track{height:5px;margin-top:10px;overflow:hidden;border-radius:999px;background:#e6ebf4}
+.runtime-progress-track span{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#7b9cda,#425f9c);transition:width .25s ease}
+.workspace-response .workspace-answer{margin-top:10px;padding:14px 15px;border:1px solid #e7ebf2;border-radius:11px;background:#fff}
+.workspace-response .workspace-answer p{margin-bottom:0;line-height:1.7;color:#5d687c;white-space:pre-wrap}
+.workspace-response .workspace-answer>b{font-size:11px;color:#35445e}
+.workspace-response .response-synthesis{border-color:#cad8f1;background:linear-gradient(130deg,#f8faff,#fff)}
+.response-error{padding:11px 13px;border:1px solid #f0d1d1;border-radius:10px;background:#fff8f8;color:#9e4242;font-size:12px;line-height:1.6}
+@media(max-width:760px){.runtime-progress{padding:11px}.workspace-response .workspace-answer{padding:12px}}
