@@ -56,6 +56,16 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS activity (
           id TEXT PRIMARY KEY, action TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS audit_events (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, event_type TEXT NOT NULL,
+          actor TEXT NOT NULL, payload TEXT NOT NULL, previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS approval_requests (
+          id TEXT PRIMARY KEY, action_type TEXT NOT NULL, description TEXT NOT NULL, requested_by TEXT NOT NULL,
+          risk_level TEXT NOT NULL, status TEXT NOT NULL, decision_by TEXT, decision_note TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL, decided_at TEXT
+        );
         """)
         if db.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0:
             db.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?)", (
@@ -80,9 +90,32 @@ def startup() -> None:
     init_db()
 
 
+def append_audit(event_type: str, actor: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Append a hash-linked audit event. This detects edits to the chain; it is not a signed external ledger."""
+    created_at = now()
+    event_id = str(uuid4())
+    canonical_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    with connect() as db:
+        row = db.execute("SELECT event_hash FROM audit_events ORDER BY seq DESC LIMIT 1").fetchone()
+        previous_hash = row["event_hash"] if row else "GENESIS"
+        material = json.dumps({
+            "id": event_id, "event_type": event_type, "actor": actor, "payload": json.loads(canonical_payload),
+            "previous_hash": previous_hash, "created_at": created_at
+        }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        import hashlib
+        event_hash = hashlib.sha256(material.encode("utf-8")).hexdigest()
+        db.execute(
+            "INSERT INTO audit_events (id,event_type,actor,payload,previous_hash,event_hash,created_at) VALUES (?,?,?,?,?,?,?)",
+            (event_id, event_type, actor, canonical_payload, previous_hash, event_hash, created_at)
+        )
+    return {"id": event_id, "event_type": event_type, "actor": actor, "payload": payload,
+            "previous_hash": previous_hash, "event_hash": event_hash, "created_at": created_at}
+
+
 def log(action: str, detail: str) -> None:
     with connect() as db:
         db.execute("INSERT INTO activity VALUES (?, ?, ?, ?)", (str(uuid4()), action, detail, now()))
+    append_audit("workspace.activity", "system", {"action": action, "detail": detail})
 
 
 class ProjectIn(BaseModel):
@@ -236,3 +269,133 @@ def list_councils() -> list[dict[str, Any]]:
 def list_activity() -> list[dict[str, Any]]:
     with connect() as db:
         return [dict(r) for r in db.execute("SELECT * FROM activity ORDER BY created_at DESC LIMIT 20")]
+
+
+# --- CFA Security: policy decisions, human approvals and verifiable audit chain ---
+
+RISK_LEVELS = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+POLICY_DEFAULTS = {
+    "project.create": "allow",
+    "brain.write": "allow",
+    "council.run": "allow",
+    "external.write": "approval_required",
+    "external.delete": "approval_required",
+    "secrets.read": "deny",
+    "shell.execute": "deny",
+}
+
+
+class ApprovalIn(BaseModel):
+    action_type: str = Field(min_length=2, max_length=100)
+    description: str = Field(min_length=3, max_length=2000)
+    requested_by: str = Field(default="workspace-owner", min_length=1, max_length=100)
+    risk_level: str = Field(default="high")
+
+
+class ApprovalDecisionIn(BaseModel):
+    decision: str = Field(pattern="^(approved|rejected)$")
+    decided_by: str = Field(min_length=1, max_length=100)
+    note: str = Field(default="", max_length=1000)
+
+
+def verify_audit_chain() -> dict[str, Any]:
+    import hashlib
+    expected_previous = "GENESIS"
+    checked = 0
+    with connect() as db:
+        rows = db.execute("SELECT * FROM audit_events ORDER BY seq ASC").fetchall()
+    for row in rows:
+        payload = json.loads(row["payload"])
+        material = json.dumps({
+            "id": row["id"], "event_type": row["event_type"], "actor": row["actor"], "payload": payload,
+            "previous_hash": row["previous_hash"], "created_at": row["created_at"]
+        }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        calculated = hashlib.sha256(material.encode("utf-8")).hexdigest()
+        if row["previous_hash"] != expected_previous or row["event_hash"] != calculated:
+            return {"valid": False, "checked": checked, "failed_event_id": row["id"]}
+        expected_previous = row["event_hash"]
+        checked += 1
+    return {"valid": True, "checked": checked, "head": expected_previous}
+
+
+@app.get("/api/security/policies")
+def security_policies() -> dict[str, Any]:
+    return {
+        "default_effect": "deny for unknown action types",
+        "policies": [{"action_type": k, "decision": v} for k, v in POLICY_DEFAULTS.items()],
+        "note": "Policy reference layer for the MVP; no external tools are executed."
+    }
+
+
+@app.get("/api/security/audit")
+def security_audit(limit: int = 50) -> dict[str, Any]:
+    limit = max(1, min(limit, 200))
+    with connect() as db:
+        rows = db.execute("SELECT * FROM audit_events ORDER BY seq DESC LIMIT ?", (limit,)).fetchall()
+    return {"integrity": verify_audit_chain(), "events": [
+        {**dict(r), "payload": json.loads(r["payload"])} for r in rows
+    ]}
+
+
+@app.post("/api/security/approvals")
+def request_approval(item: ApprovalIn) -> dict[str, Any]:
+    risk = item.risk_level.lower()
+    if risk not in RISK_LEVELS:
+        raise HTTPException(status_code=422, detail="risk_level must be low, medium, high, or critical")
+    policy = POLICY_DEFAULTS.get(item.action_type, "deny")
+    status = "pending" if policy == "approval_required" or RISK_LEVELS[risk] >= 3 else (
+        "approved" if policy == "allow" else "rejected"
+    )
+    record = {
+        "id": str(uuid4()), "action_type": item.action_type, "description": item.description.strip(),
+        "requested_by": item.requested_by, "risk_level": risk, "status": status,
+        "decision_by": "policy-engine" if status != "pending" else None,
+        "decision_note": "Policy decision: " + policy, "created_at": now(),
+        "decided_at": now() if status != "pending" else None
+    }
+    with connect() as db:
+        db.execute(
+            "INSERT INTO approval_requests (id,action_type,description,requested_by,risk_level,status,decision_by,decision_note,created_at,decided_at) VALUES (:id,:action_type,:description,:requested_by,:risk_level,:status,:decision_by,:decision_note,:created_at,:decided_at)",
+            record
+        )
+    append_audit("approval.requested", item.requested_by, {
+        "approval_id": record["id"], "action_type": item.action_type, "risk_level": risk, "status": status
+    })
+    log("Approval " + status, item.action_type + ": " + item.description[:150])
+    return record
+
+
+@app.get("/api/security/approvals")
+def list_approvals(status: str | None = None) -> list[dict[str, Any]]:
+    with connect() as db:
+        if status:
+            rows = db.execute("SELECT * FROM approval_requests WHERE status=? ORDER BY created_at DESC", (status,)).fetchall()
+        else:
+            rows = db.execute("SELECT * FROM approval_requests ORDER BY created_at DESC LIMIT 100").fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/security/approvals/{approval_id}/decision")
+def decide_approval(approval_id: str, item: ApprovalDecisionIn) -> dict[str, Any]:
+    with connect() as db:
+        row = db.execute("SELECT * FROM approval_requests WHERE id=?", (approval_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Approval request not found")
+        if row["status"] != "pending":
+            raise HTTPException(status_code=409, detail="Approval request has already been decided")
+        decided_at = now()
+        db.execute(
+            "UPDATE approval_requests SET status=?, decision_by=?, decision_note=?, decided_at=? WHERE id=? AND status='pending'",
+            (item.decision, item.decided_by, item.note, decided_at, approval_id)
+        )
+        record = dict(db.execute("SELECT * FROM approval_requests WHERE id=?", (approval_id,)).fetchone())
+    append_audit("approval." + item.decision, item.decided_by, {
+        "approval_id": approval_id, "action_type": record["action_type"], "note": item.note
+    })
+    log("Approval " + item.decision, record["action_type"] + " decided by " + item.decided_by)
+    return record
+
+
+@app.get("/api/security/audit/verify")
+def audit_verify() -> dict[str, Any]:
+    return verify_audit_chain()
