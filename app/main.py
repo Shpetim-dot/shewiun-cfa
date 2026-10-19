@@ -343,9 +343,12 @@ def request_approval(item: ApprovalIn) -> dict[str, Any]:
     if risk not in RISK_LEVELS:
         raise HTTPException(status_code=422, detail="risk_level must be low, medium, high, or critical")
     policy = POLICY_DEFAULTS.get(item.action_type, "deny")
-    status = "pending" if policy == "approval_required" or RISK_LEVELS[risk] >= 3 else (
-        "approved" if policy == "allow" else "rejected"
-    )
+    if policy == "deny":
+        status = "rejected"
+    elif policy == "approval_required" or RISK_LEVELS[risk] >= 3:
+        status = "pending"
+    else:
+        status = "approved"
     record = {
         "id": str(uuid4()), "action_type": item.action_type, "description": item.description.strip(),
         "requested_by": item.requested_by, "risk_level": risk, "status": status,
