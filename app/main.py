@@ -476,7 +476,7 @@ async def _execute_runtime_run(run_id: str) -> None:
                 _runtime_event(run_id, "run.cancelled", {"completed_steps": len(transcript)})
                 return
             role = roles[state["next_index"]]
-            context = "\\n".join(f"{m['role']}: {m['content']}" for m in transcript)
+            context = "\n".join(f"{m['role']}: {m['content']}" for m in transcript)
             reply = await model_reply(role, request["topic"], context) if live else None
             if reply is None:
                 reply = demo_reply(role, request["topic"], context)
