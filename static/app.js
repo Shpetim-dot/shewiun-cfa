@@ -38,14 +38,41 @@ $("#refresh-approvals")?.addEventListener("click",refreshApprovals);
 $("#verify-audit")?.addEventListener("click",async()=>{try{const result=await api("/api/security/audit/verify");$("#audit-integrity").textContent=result.valid?"Integrity valid · "+result.checked+" events checked":"Integrity check failed at event "+result.failed_event_id;$("#audit-integrity").className="integrity-line "+(result.valid?"valid":"invalid");}catch(e){toast(e.message)}});
 
 
-// Conversation-first workspace composer
+// Conversation-first workspace composer backed by the durable runtime queue.
 const workspaceForm = $("#workspace-form");
 const workspacePrompt = $("#workspace-prompt");
 const workspaceResponse = $("#workspace-response");
-$$("[data-prompt]").forEach(button => button.addEventListener("click", () => {
+$$("#workspace-form [data-prompt], [data-prompt]").forEach(button => button.addEventListener("click", () => {
   workspacePrompt.value = button.dataset.prompt || "";
   workspacePrompt.focus();
 }));
+
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+function renderRuntimeProgress(topic, run) {
+  const transcript = run?.state?.transcript || [];
+  const status = run?.status || "queued";
+  const completed = transcript.length;
+  const total = run?.state?.roles?.length || 4;
+  workspaceResponse.hidden = false;
+  workspaceResponse.innerHTML =
+    '<div class="workspace-response-head"><span class="composer-mark">✳</span><b>CFA Council</b><small>' +
+    esc(status.toUpperCase()) + '</small></div>' +
+    '<p class="workspace-user-prompt"></p>' +
+    '<div class="runtime-progress" role="status" aria-live="polite"><div class="runtime-progress-top"><span>' +
+    (status === "completed" ? "Council completed" : status === "failed" ? "Run failed" : "Working through perspectives…") +
+    '</span><b>' + completed + ' / ' + total + '</b></div><div class="runtime-progress-track"><span style="width:' +
+    Math.min(100, Math.round(completed / Math.max(total, 1) * 100)) + '%"></span></div></div>' +
+    transcript.map(message => '<article class="workspace-answer ' +
+      (message.role === "Synthesizer" ? "response-synthesis" : "") + '"><b>' +
+      esc(message.role) + (message.role === "Synthesizer" ? ' · Recommendation' : '') +
+      '</b><p>' + esc(message.content) + '</p></article>').join("") +
+    (status === "failed" ? '<p class="response-error"></p>' : "");
+  workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
+  if (status === "failed") {
+    workspaceResponse.querySelector(".response-error").textContent = run.error || "The run failed. Retry with a narrower prompt.";
+  }
+}
+
 workspaceForm?.addEventListener("submit", async event => {
   event.preventDefault();
   const topic = workspacePrompt.value.trim();
@@ -56,24 +83,40 @@ workspaceForm?.addEventListener("submit", async event => {
   }
   const send = $("#workspace-send");
   send.disabled = true;
-  send.innerHTML = "Working…";
+  send.innerHTML = "Starting…";
   workspaceResponse.hidden = false;
-  workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="composer-mark">✳</span><b>CFA Council is working</b><small>PROCESSING</small></div><p class="workspace-user-prompt"></p><div class="workspace-answer"><p>Gathering perspectives and preparing a synthesis…</p></div>';
+  workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="composer-mark">✳</span><b>Starting CFA Council</b><small>QUEUED</small></div><p class="workspace-user-prompt"></p><div class="workspace-answer"><p>Creating a durable run and preparing the agent sequence…</p></div>';
   workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
   try {
-    const council = await api("/api/council", {
+    const created = await api("/api/runtime/runs", {
       method: "POST",
       body: JSON.stringify({topic, roles:["Strategist","Skeptic","Builder"], rounds:1})
     });
-    const transcript = Array.isArray(council.transcript) ? council.transcript : [];
-    workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="composer-mark">✳</span><b>CFA Council</b><small>' + esc(council.mode || "demo") + ' mode</small></div><p class="workspace-user-prompt"></p>' +
-      transcript.map(message => '<article class="workspace-answer ' + (message.role === "Synthesizer" ? "response-synthesis" : "") + '"><b>' + esc(message.role) + (message.role === "Synthesizer" ? ' · Recommendation' : '') + '</b><p>' + esc(message.content) + '</p></article>').join("");
-    workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
-    workspacePrompt.value = "";
-    await refresh();
-    toast("Council session completed");
+    send.innerHTML = "Working…";
+    let run = null;
+    const deadline = Date.now() + 120000;
+    while (Date.now() < deadline) {
+      run = await api("/api/runtime/runs/" + encodeURIComponent(created.id));
+      renderRuntimeProgress(topic, run);
+      if (["completed", "failed", "cancelled"].includes(run.status)) break;
+      await wait(900);
+    }
+    if (!run || !["completed", "failed", "cancelled"].includes(run.status)) {
+      workspaceResponse.innerHTML += '<p class="response-error">This run is still processing in the background. Open CFA Council history to inspect it shortly.</p>';
+      toast("Run continues in the background");
+      return;
+    }
+    if (run.status === "completed") {
+      workspacePrompt.value = "";
+      await refresh();
+      toast("Council session completed");
+    } else if (run.status === "cancelled") {
+      toast("Council run cancelled");
+    } else {
+      toast("Council run failed");
+    }
   } catch (error) {
-    workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="composer-mark">!</span><b>Could not complete the request</b></div><p class="response-error"></p>';
+    workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="composer-mark">!</span><b>Could not start the request</b></div><p class="response-error"></p>';
     workspaceResponse.querySelector(".response-error").textContent = error.message || "Unexpected error. Try again.";
   } finally {
     send.disabled = false;
