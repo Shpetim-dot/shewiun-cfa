@@ -16,13 +16,34 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import httpx
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
-# Vercel functions run from a read-only deployment bundle. /tmp is writable but ephemeral;
-# use a managed database via CFA_DATABASE_PATH for durable production data.
-DEFAULT_DB_PATH = "/tmp/cfa.db" if os.getenv("VERCEL") else "./data/cfa.db"
-DB_PATH = Path(os.getenv("CFA_DATABASE_PATH", DEFAULT_DB_PATH))
+# Vercel's deployment bundle is read-only. A relative CFA_DATABASE_PATH such as
+# "./data/cfa.db" must not override the writable /tmp fallback on Vercel.
+configured_db_path = os.getenv("CFA_DATABASE_PATH")
+if os.getenv("VERCEL"):
+    DB_PATH = Path(configured_db_path) if configured_db_path and Path(configured_db_path).is_absolute() else Path("/tmp/cfa.db")
+else:
+    DB_PATH = Path(configured_db_path or "./data/cfa.db")
 if not DB_PATH.is_absolute():
     DB_PATH = ROOT / DB_PATH
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
