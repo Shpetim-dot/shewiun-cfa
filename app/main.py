@@ -504,7 +504,7 @@ async def _execute_runtime_run(run_id: str) -> None:
         with connect() as db:
             row = db.execute("SELECT attempt,max_attempts FROM runtime_runs WHERE id=?", (run_id,)).fetchone()
             if row and row["attempt"] < row["max_attempts"]:
-                db.execute("UPDATE runtime_runs SET status='queued',attempt=attempt+1,error=?,updated_at=? WHERE id=?",
+                db.execute("UPDATE runtime_runs SET status='queued',error=?,updated_at=? WHERE id=?",
                            (str(exc)[:1000], now(), run_id))
                 event_type = "run.retry_scheduled"
             else:
