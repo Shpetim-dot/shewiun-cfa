@@ -7,3 +7,41 @@
 
 .approval-list{display:grid}.approval-row{display:flex;align-items:center;gap:12px;padding:14px 0;border-top:1px solid #f0ede6}.approval-main{flex:1;min-width:0}.approval-main b{font-size:11px}.approval-main p{font-size:10px;color:#687386;line-height:1.5;margin:5px 0}.approval-main small{font-size:9px;color:#929aa7}.approval-state{font-size:9px;font-weight:700;text-transform:uppercase;border-radius:5px;padding:6px 8px;background:#e7efe8;color:#4c8665}.approval-state.pending{background:#f7ecd5;color:#9a783a}.approval-state.rejected{background:#f7e5e1;color:#a65f55}.approval-buttons{display:flex;gap:6px}.approval-buttons .btn{padding:8px 10px;font-size:9px}.integrity-line{font-size:10px;color:#8b93a1;padding:0 0 10px}.integrity-line.valid{color:#4c8665}.integrity-line.invalid{color:#b54848}
 @media(max-width:760px){.approval-row{flex-wrap:wrap}.approval-main{flex-basis:calc(100% - 80px)}.approval-buttons{width:100%;justify-content:flex-end}}
+
+
+/* CFA workspace composer: conversation-first, ChatGPT-inspired layout */
+.workspace-composer{margin:22px 0 30px;padding:23px 24px 18px;border-radius:16px;background:var(--paper);border:1px solid #e5e0d5;box-shadow:0 12px 34px #18223508}
+.composer-heading{display:flex;align-items:center;gap:12px;margin-bottom:17px}
+.composer-mark{width:38px;height:38px;display:grid;place-items:center;border-radius:12px;background:var(--navy);color:#e5d9bd;font-size:20px;box-shadow:inset 0 0 0 1px #ffffff18}
+.composer-heading h2{font:700 17px Manrope;margin:0;color:#1b273a;letter-spacing:-.35px}
+.composer-heading p{font-size:12px;color:#778194;margin:5px 0 0}
+#workspace-form{border:1px solid #dcd7cb;background:#fffefa;border-radius:13px;padding:13px;transition:border-color .15s,box-shadow .15s}
+#workspace-form:focus-within{border-color:#a9b8ce;box-shadow:0 0 0 3px #172a4410}
+#workspace-prompt{width:100%;border:0;outline:0;resize:vertical;min-height:74px;max-height:240px;background:transparent;color:#182235;font:14px/1.65 'DM Sans',sans-serif;padding:4px 5px}
+#workspace-prompt::placeholder{color:#969ba4}
+.composer-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 2px 0;border-top:1px solid #f0ede6}
+.composer-footer>span{font-size:10px;color:#828b9a;display:flex;align-items:center;gap:7px}
+.composer-status{width:7px;height:7px;background:#83c9a6;border-radius:50%;display:inline-block;box-shadow:0 0 0 3px #83c9a61c}
+.composer-footer .btn{font-size:11px;padding:10px 13px;background:#e7ddc5}
+.prompt-chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px}
+.prompt-chips button{background:#f8f6f0;border:1px solid #e8e3d8;color:#596477;border-radius:20px;padding:8px 11px;font-size:10px;transition:all .15s}
+.prompt-chips button:hover{background:#f0eadc;border-color:#d6c8a8;color:#26344a}
+.workspace-response{margin-top:18px;padding:17px;border-radius:12px;background:#f7f5ef;border:1px solid #e8e3d8}
+.workspace-response[hidden]{display:none}
+.workspace-response-head{display:flex;align-items:center;gap:9px;margin-bottom:13px}
+.workspace-response-head b{font:700 12px Manrope;color:#253149}
+.workspace-response-head small{margin-left:auto;color:#8b93a1;font-size:9px;text-transform:uppercase;letter-spacing:1px}
+.workspace-user-prompt{font-size:12px;line-height:1.65;color:#566174;border-left:2px solid #cfc3a5;padding:2px 0 2px 11px;margin:0 0 15px}
+.workspace-answer{padding:13px 0;border-top:1px solid #e8e3d8}
+.workspace-answer:first-of-type{border-top:0}
+.workspace-answer b{font:700 11px Manrope;color:#27354b}
+.workspace-answer p{font-size:12px;line-height:1.75;color:#505c6d;margin:7px 0 0;white-space:pre-wrap}
+.workspace-response .response-error{color:#9f4d46;font-size:12px}
+.workspace-response .response-synthesis{background:#fffdf7;border:1px solid #e5dcc7;border-radius:10px;padding:14px;margin-top:12px}
+.workspace-response .response-synthesis b{color:#29374c}
+.workspace-response .response-synthesis p{color:#38465a}
+.hero{min-height:265px;padding:30px 35px}
+.hero h1{font-size:32px}
+.section-heading{margin-top:27px}
+.nav-item.active{box-shadow:inset 3px 0 0 #b8a982}
+@media(max-width:760px){.workspace-composer{padding:17px 14px;margin:16px 0 24px}.composer-heading h2{font-size:15px}.composer-footer{align-items:flex-start;flex-direction:column}.composer-footer .btn{width:100%}.hero{padding:25px 22px}.hero h1{font-size:28px}.prompt-chips button{font-size:9px}}
