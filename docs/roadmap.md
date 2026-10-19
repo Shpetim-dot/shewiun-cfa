@@ -9,8 +9,10 @@
 
 ## Next — reliable agent runtime
 - [ ] Extract API routes, provider adapters, policy, audit and persistence into modules
-- [ ] Add persistent workflow runs and checkpoints
-- [ ] Add timeouts, cancellation, bounded retries and idempotency keys
+- [x] Add persistent Council runs, per-speaker checkpoints, bounded retries, cancellation requests and restart recovery (single-process SQLite MVP)
+- [ ] Move runtime queue to PostgreSQL/lease-based workers for multi-process scaling
+- [x] Add cancellation requests and bounded retries for Council runs
+- [ ] Add per-step timeouts and idempotency keys before external side effects
 - [ ] Record model name, token usage, latency, errors and per-run budget
 - [ ] Add streaming Council events to the frontend
 
