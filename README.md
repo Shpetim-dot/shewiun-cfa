@@ -9,8 +9,9 @@
 - CFA Brain: source-aware knowledge entries with type, confidence and source
 - CFA Council: start a multi-role discussion and receive a synthesis
 - CFA Control: inspect agents and their operating status
-- CFA Security: visible safety defaults, activity log and approval-oriented design
+- CFA Security: deny-by-default policy map, persisted human-approval queue, and SHA-256 hash-linked audit events with integrity verification
 - SQLite persistence; responsive dark navy / cream UI
+- Backend patterns informed by open-source projects including BoundFlow, oc8, LangGraph, Letta and AgentLens (see docs/backend-reference-architecture.md)
 - Optional OpenAI-compatible chat-completions integration
 
 ## Run locally
@@ -44,6 +45,20 @@ Without a key, Council runs in clearly labeled demo mode. Never commit real keys
 - `GET /api/agents`
 - `GET/POST /api/council`
 - `GET /api/activity`
+- `GET /api/security/policies`
+- `GET/POST /api/security/approvals`
+- `POST /api/security/approvals/{id}/decision`
+- `GET /api/security/audit`
+- `GET /api/security/audit/verify`
+
+## Tests
+
+Install test dependencies and run the security API tests:
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
 
 ## Security notes
 This is an MVP, not a hardened multi-user production system. It does not execute arbitrary tools or shell commands. Before production use, add authentication, per-user authorization, encrypted secret storage, rate limiting, backups, structured provider-specific controls and deployment secrets. Model calls can send the entered meeting prompt to the configured provider.
