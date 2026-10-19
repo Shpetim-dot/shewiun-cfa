@@ -24,7 +24,7 @@ if not DB_PATH.is_absolute():
     DB_PATH = ROOT / DB_PATH
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Shewiun CFA", version="0.1.0", description="Control & Focus Architecture")
+app = FastAPI(title="Shewiun CFA", version="0.2.0", description="Control & Focus Architecture")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 
@@ -177,7 +177,7 @@ def home() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "app": "Shewiun CFA", "version": "0.1.0",
+    return {"status": "ok", "app": "Shewiun CFA", "version": "0.2.0",
             "model_configured": bool(os.getenv("CFA_MODEL_API_KEY"))}
 
 
@@ -452,7 +452,8 @@ def _runtime_run(row: sqlite3.Row, include_state: bool = True) -> dict[str, Any]
     state = json.loads(item.pop("state_json"))
     if include_state:
         item["state"] = state
-    item["result"] = json.loads(item.pop("result_json")) if item.get("result_json") else None
+    result_json = item.pop("result_json")
+    item["result"] = json.loads(result_json) if result_json else None
     item["cancel_requested"] = bool(item["cancel_requested"])
     return item
 
