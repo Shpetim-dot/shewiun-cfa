@@ -45,8 +45,12 @@ def now() -> str:
 
 
 def connect() -> sqlite3.Connection:
-    db = sqlite3.connect(DB_PATH)
+    # A short lock wait prevents transient concurrent writes from failing immediately.
+    # Foreign-key enforcement is connection-local in SQLite, so enable it consistently.
+    db = sqlite3.connect(DB_PATH, timeout=15)
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA busy_timeout = 15000")
+    db.execute("PRAGMA foreign_keys = ON")
     return db
 
 
@@ -189,8 +193,17 @@ def home() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "app": "Shewiun CFA", "version": "0.2.0",
-            "model_configured": bool(os.getenv("CFA_MODEL_API_KEY"))}
+    return {
+        "status": "ok",
+        "app": "Shewiun CFA",
+        "version": "0.2.0",
+        "model_configured": bool(os.getenv("CFA_MODEL_API_KEY")),
+        "storage": "ephemeral_sqlite" if IS_VERCEL else "sqlite",
+        "storage_warning": (
+            "Vercel /tmp storage is ephemeral; data may be lost between instances or deployments."
+            if IS_VERCEL else None
+        ),
+    }
 
 
 @app.get("/api/projects")
