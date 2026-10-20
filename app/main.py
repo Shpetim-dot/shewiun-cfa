@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -103,10 +104,19 @@ def _is_protected_api(path: str) -> bool:
 
 
 def _same_origin(request: Request) -> bool:
-    origin = request.headers.get("origin")
-    if not origin:
+    origin_value = request.headers.get("origin")
+    if not origin_value:
         return False
-    return origin.rstrip("/") == f"{request.url.scheme}://{request.headers.get('host', '')}".rstrip("/")
+    try:
+        origin = urlsplit(origin_value)
+    except ValueError:
+        return False
+    host = request.headers.get("host", "").lower()
+    if not host or origin.netloc.lower() != host or origin.username or origin.password:
+        return False
+    if IS_VERCEL:
+        return origin.scheme == "https"
+    return origin.scheme == request.url.scheme
 
 
 @app.middleware("http")
@@ -171,6 +181,10 @@ def _apply_security_headers(response):
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
+    if IS_VERCEL:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
     response.headers.setdefault("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
     return response
 
