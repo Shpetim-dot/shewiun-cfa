@@ -670,6 +670,8 @@ async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
         result = await create_review(DB_PATH, item.answers)
     except sqlite3.Error:
         raise HTTPException(status_code=503, detail="Review storage is unavailable. Please try again later.")
+    if not result["model_configured"]:
+        result["assessment_type"] = "deterministic_self_assessment"
     result["preliminary_status"] = result["deterministic"]["preliminary_status"]
     result["findings"] = result["deterministic"]["findings"]
     result["finding_count"] = result["deterministic"]["finding_count"]
