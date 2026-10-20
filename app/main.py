@@ -676,7 +676,7 @@ async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
     if len(encoded) > 20000:
         raise HTTPException(status_code=413, detail="Answers exceed the 20 KB limit.")
     try:
-        result = await create_review(DB_PATH, item.answers)
+        result = await create_review(DB_PATH, item.answers, allow_share=not IS_VERCEL)
     except sqlite3.Error:
         raise HTTPException(status_code=503, detail="Review storage is unavailable. Please try again later.")
     if not result["model_configured"]:
