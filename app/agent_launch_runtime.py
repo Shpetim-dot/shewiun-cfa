@@ -64,7 +64,13 @@ def init_review_tables(db_path: Path) -> None:
 
 
 def model_configured() -> bool:
-    return bool(os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME"))
+    return bool(os.getenv("GEMINI_API_KEY") or (os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME")))
+
+
+def configured_model_name() -> str | None:
+    if os.getenv("GEMINI_API_KEY"):
+        return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    return os.getenv("CFA_MODEL_NAME") if os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME") else None
 
 
 def _schema_prompt(role: str) -> str:
@@ -96,33 +102,44 @@ def _schema_prompt(role: str) -> str:
 
 async def _call_model(role: str, answers: dict[str, Any], findings: list[dict[str, Any]],
                       perspectives: dict[str, Any] | None = None) -> dict[str, Any]:
-    base = os.getenv("CFA_MODEL_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    key = os.getenv("CFA_MODEL_API_KEY", "")
-    model = os.getenv("CFA_MODEL_NAME", "gpt-4o-mini")
-    payload = {
-        "answers": answers,
-        "deterministic_findings": findings,
-        "other_perspectives": perspectives or {},
-    }
+    payload = {"answers": answers, "deterministic_findings": findings,
+               "other_perspectives": perspectives or {}}
+    user_text = json.dumps(payload, ensure_ascii=False)
     async with httpx.AsyncClient(timeout=httpx.Timeout(55, connect=10)) as client:
-        response = await client.post(
-            f"{base}/chat/completions",
-            headers={"Authorization": f"Bearer {key}"},
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": _schema_prompt(role)},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                "temperature": 0.2,
-                "response_format": {"type": "json_object"},
-            },
-        )
-        response.raise_for_status()
-        raw = response.json()["choices"][0]["message"]["content"]
+        if os.getenv("GEMINI_API_KEY"):
+            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+            response = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                params={"key": os.getenv("GEMINI_API_KEY")},
+                json={"systemInstruction": {"parts": [{"text": _schema_prompt(role)}]},
+                      "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+                      "generationConfig": {"temperature": 0.2, "maxOutputTokens": 3000,
+                                           "responseMimeType": "application/json"}},
+            )
+            response.raise_for_status()
+            parts = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            raw = "\\n".join(part.get("text", "") for part in parts if part.get("text"))
+        else:
+            base = os.getenv("CFA_MODEL_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+            key = os.getenv("CFA_MODEL_API_KEY", "")
+            model = os.getenv("CFA_MODEL_NAME", "")
+            response = await client.post(
+                f"{base}/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": model,
+                      "messages": [{"role": "system", "content": _schema_prompt(role)},
+                                   {"role": "user", "content": user_text}],
+                      "temperature": 0.2, "response_format": {"type": "json_object"}},
+            )
+            response.raise_for_status()
+            raw = response.json()["choices"][0]["message"]["content"]
+    if not raw or not raw.strip():
+        raise ValueError(f"{role} returned empty model content")
     parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{role} response must be a JSON object")
     required = ["summary", "options", "risks", "assumptions", "recommendations",
-                 "premortem", "kill_criteria", "what_would_change_recommendation"]
+                "premortem", "kill_criteria", "what_would_change_recommendation"]
     if role == "Synthesis":
         required.extend(["verdict", "recommendation", "rationale", "options_considered",
                          "key_risks", "assumptions_ledger", "next_steps", "confidence",
@@ -224,7 +241,8 @@ async def create_review(db_path: Path, answers: dict[str, Any], request_id: str 
         "created_at": created,
         "assessment_type": "structured_self_assessment",
         "model_configured": model_live,
-        "model": os.getenv("CFA_MODEL_NAME") if model_live else None,
+        "model": configured_model_name() if model_live else None,
+        "model_provider": "Google Gemini API" if os.getenv("GEMINI_API_KEY") else ("OpenAI-compatible" if model_live else None),
         "disclaimer": "This is a structured self-assessment based on user-provided answers. It is not a security test, audit, or certification.",
         "answers": answers,
         "deterministic": deterministic,
