@@ -170,6 +170,7 @@ def _enforce_rules(memo: dict[str, Any], findings: list[dict[str, Any]]) -> dict
 
 
 async def create_review(db_path: Path, answers: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
+    init_review_tables(db_path)
     if not model_configured():
         perspectives = {}
         memo = _fallback_memo(evaluate_agent_launch(answers)["findings"])
