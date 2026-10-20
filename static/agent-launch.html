@@ -26,6 +26,7 @@
 <div class="title-row"><span class="mascot" aria-hidden="true"></span><h1>Review your agent launch</h1></div>
 <p>Answer a few questions about the agent’s purpose, permissions and controls to identify launch risks that need review.</p>
 <div class="notice"><strong>Self-assessment only.</strong> This is not a security test, audit, or certification. Do not enter secrets, API keys, credentials, or customer data. Describe credential types without sharing the credentials themselves.</div>
+<div class="notice analytics-consent hidden" id="analytics-consent"><strong>Optional usage analytics.</strong> Allow anonymous funnel events to help improve this review, or continue without analytics. <button type="button" class="btn" id="analytics-allow">Allow analytics</button> <button type="button" class="btn" id="analytics-decline">Continue without</button></div>
 </section>
 <div class="step-meta"><span id="step-label">Step 1 of 6</span><span>Required fields marked *</span></div><div class="track"><span id="progress"></span></div>
 <form id="review-form" novalidate>
@@ -119,11 +120,12 @@ function renderResult(data){
  const reset=document.querySelector("#start-over");if(reset)reset.onclick=()=>location.href="/review/agent-launch";
 }
 function trackReviewEvent(event_name,metadata={},share_url=null){
+ try{if(localStorage.getItem("alr_analytics_consent")!=="yes")return;}catch{return;}
  const pathToken=location.pathname.split("/").pop();
  const token=share_url?String(share_url).split("/").pop():(/^[a-f0-9]{64}$/.test(pathToken)?pathToken:null);
- fetch("/api/review/agent-launch/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event_name,share_token:token,metadata})}).catch(()=>{});
+ fetch("/api/review/agent-launch/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event_name,share_token:token,metadata,analytics_consent:true})}).catch(()=>{});
 }
-trackReviewEvent("page_view",{});
+const analyticsBanner=document.querySelector("#analytics-consent");let analyticsChoice=null;try{analyticsChoice=localStorage.getItem("alr_analytics_consent")}catch{}if(!analyticsChoice&&analyticsBanner)analyticsBanner.classList.remove("hidden");document.querySelector("#analytics-allow")?.addEventListener("click",()=>{try{localStorage.setItem("alr_analytics_consent","yes")}catch{}if(analyticsBanner)analyticsBanner.classList.add("hidden");trackReviewEvent("page_view",{})});document.querySelector("#analytics-decline")?.addEventListener("click",()=>{try{localStorage.setItem("alr_analytics_consent","no")}catch{}if(analyticsBanner)analyticsBanner.classList.add("hidden")});if(analyticsChoice==="yes")trackReviewEvent("page_view",{});
 function escapeHtml(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 const resultToken=location.pathname.match(/\/review\/agent-launch\/result\/([a-f0-9]{32,})$/);if(resultToken){form.classList.add("hidden");document.querySelector(".step-meta").classList.add("hidden");document.querySelector(".track").classList.add("hidden");document.querySelector("#result").classList.remove("hidden");document.querySelector("#result").textContent="Loading saved review…";fetch("/api/review/agent-launch/result/"+resultToken[1]).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.detail||"Review not found");renderResult(d)}).catch(e=>{document.querySelector("#result").textContent=e.message})}
 document.querySelector("#add-tool").addEventListener("click",addTool);addTool();document.querySelector("#back").addEventListener("click",()=>{if(current>0){current--;showStep()}});document.querySelector("#next").addEventListener("click",async()=>{if(!validateStep())return;trackReviewEvent("step_completed",{step:current+1});if(current<steps.length-1){current++;showStep();return}const answers=collectAnswers();document.querySelector("#next").disabled=true;document.querySelector("#next").textContent="Checking answers…";try{const response=await fetch("/api/review/agent-launch/assess",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({answers})});const data=await response.json();if(!response.ok)throw new Error(data.detail||"Could not assess answers");renderResult(data);if(data.share_url)history.replaceState({}, "", data.share_url)}catch(e){errorBox.textContent=e.message||"Could not assess answers."}finally{document.querySelector("#next").disabled=false;document.querySelector("#next").textContent="Review answers"}});
