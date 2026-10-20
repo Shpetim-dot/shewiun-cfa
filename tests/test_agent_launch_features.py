@@ -65,7 +65,7 @@ def test_review_analytics_and_retention_endpoint_are_secret_protected(tmp_path, 
     monkeypatch.setenv("CRON_SECRET", "c" * 48)
     with TestClient(main.app) as client:
         _create_review(client)
-        event = client.post("/api/review/agent-launch/event", json={"event_name": "page_view", "metadata": {"source": "test"}})
+        event = client.post("/api/review/agent-launch/event", json={"event_name": "page_view", "metadata": {"source": "test"}, "analytics_consent": True})
         assert event.status_code == 200
         summary = client.get("/api/review/agent-launch/admin/analytics?days=30")
         assert summary.status_code == 200
