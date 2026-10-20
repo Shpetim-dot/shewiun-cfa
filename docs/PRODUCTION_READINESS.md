@@ -7,7 +7,7 @@ The application intentionally reports `production_ready: false`. Do not use the 
 ### Required before a real production release
 
 1. **Persistent database and durable jobs**
-   - Replace SQLite with PostgreSQL and move all workspace/review records to it.
+   - Configure a dedicated PostgreSQL database with `DATABASE_URL` or `CFA_DATABASE_URL`, apply `migrations/001_postgres_schema.sql`, and verify that all workspace/review records are being written to PostgreSQL. The adapter and initial schema migration are now in the branch, but no live database connection has been configured or integration-tested.
    - Move the runtime worker from an in-process task loop to a durable queue/worker with idempotent jobs, retries, leases, cancellation, and recovery.
    - Configure backups, restore testing, retention and deletion jobs.
    - The app can use `DATABASE_URL` or `CFA_DATABASE_URL` through the PostgreSQL adapter. A connection string alone is not enough: provision a dedicated database, apply/verify the schema, and test backups and concurrent runtime operations.
@@ -37,13 +37,13 @@ The application intentionally reports `production_ready: false`. Do not use the 
 
 - Agent Launch Review is a user-answer-based self-assessment. It is not a penetration test, security audit, certification, or proof of safety.
 - A configured model key proves only that configuration is present; it does not guarantee provider availability or free-tier quota.
-- The current persistence backend is SQLite. On Vercel it uses ephemeral `/tmp` storage.
+- The default persistence backend remains SQLite. On Vercel it uses ephemeral `/tmp` storage. PostgreSQL is selected only when `DATABASE_URL` or `CFA_DATABASE_URL` is configured and reachable.
 - The current job worker and rate limits are in-process, not durable/distributed.
 - The shared-password gate is not a substitute for SSO, MFA, organization/tenant authorization, or per-user audit attribution.
 
 ## Release checklist
 
-- [ ] PostgreSQL adapter and migrations implemented and tested.
+- [ ] Dedicated PostgreSQL database provisioned; migration applied; live integration, concurrency, and backup/restore tests passed.
 - [ ] Durable queue/worker implemented and tested under retries, timeouts, and concurrent execution.
 - [ ] Individual identity, MFA/SSO, roles, tenant isolation, and session revocation implemented.
 - [ ] Distributed rate limits and provider budget caps configured.
