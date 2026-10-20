@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .agent_launch_rules import evaluate_agent_launch
+from .agent_launch_runtime import create_review, get_review_by_token, init_review_tables
 
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
@@ -123,6 +124,7 @@ _runtime_worker_task: asyncio.Task | None = None
 async def startup() -> None:
     global _runtime_worker_task
     init_db()
+    init_review_tables(DB_PATH)
     # Single-process SQLite MVP: recover interrupted runs after restart.
     with connect() as db:
         db.execute("UPDATE runtime_runs SET status='queued', updated_at=?, error=NULL WHERE status='running'", (now(),))
@@ -644,11 +646,33 @@ def agent_launch_review_page() -> FileResponse:
     return FileResponse(STATIC / "agent-launch.html")
 
 
+@app.get("/review/agent-launch/result/{share_token}")
+def agent_launch_review_result_page(share_token: str) -> FileResponse:
+    # The random token is the capability for this private, read-only share URL.
+    # Result API returns 404 for unknown/revoked tokens; no public index exists.
+    return FileResponse(STATIC / "agent-launch.html", headers={"X-Robots-Tag": "noindex, nofollow"})
+
+
+@app.get("/api/review/agent-launch/result/{share_token}")
+def get_agent_launch_result(share_token: str) -> dict[str, Any]:
+    result = get_review_by_token(DB_PATH, share_token)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Review not found or link revoked.")
+    return result
+
+
 @app.post("/api/review/agent-launch/assess")
-def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
-    # This endpoint intentionally performs deterministic checks only. No model
-    # calls, persistence, or claims of testing/audit/certification in Phase 1.
+async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
     encoded = json.dumps(item.answers, ensure_ascii=False)
     if len(encoded) > 20000:
         raise HTTPException(status_code=413, detail="Answers exceed the 20 KB limit.")
-    return evaluate_agent_launch(item.answers)
+    try:
+        result = await create_review(DB_PATH, item.answers)
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail="Review storage is unavailable. Please try again later.")
+    result["preliminary_status"] = result["deterministic"]["preliminary_status"]
+    result["findings"] = result["deterministic"]["findings"]
+    result["finding_count"] = result["deterministic"]["finding_count"]
+    result["note"] = ("Model-backed perspectives and synthesis completed." if result["model_configured"]
+                      else "No model was used. This is a deterministic self-assessment preview only.")
+    return result
