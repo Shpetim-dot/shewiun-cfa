@@ -334,7 +334,7 @@ async def model_reply(role: str, topic: str, context: str) -> str | None:
             model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
             response = await client.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                params={"key": os.getenv("GEMINI_API_KEY")},
+                headers={"x-goog-api-key": os.getenv("GEMINI_API_KEY")},
                 json={"systemInstruction": {"parts": [{"text": system}]},
                       "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                       "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1200}},
