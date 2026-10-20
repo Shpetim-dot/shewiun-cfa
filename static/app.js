@@ -24,7 +24,6 @@ $("#brain-form").addEventListener("submit",async e=>{if(e.submitter?.value==="ca
 $("#brain-search").addEventListener("input",()=>{$("#brain-list").innerHTML=filteredBrain().map(brainMarkup).join("")||'<div class="no-results">No matching knowledge entries.</div>'});$("#brain-filter").addEventListener("change",()=>{$("#brain-list").innerHTML=filteredBrain().map(brainMarkup).join("")||'<div class="no-results">No matching knowledge entries.</div>'});
 $("#start-council").addEventListener("click",async()=>{const topic=$("#council-topic").value.trim();if(topic.length<3){toast("Enter a discussion topic first");$("#council-topic").focus();return}const roles=$$('input[type=checkbox][value]:checked').map(x=>x.value);const btn=$("#start-council");btn.disabled=true;btn.textContent="Council is discussing…";$("#transcript").classList.add("empty-state");$("#transcript").innerHTML='<h3>Perspectives are coming together.</h3><p>Waiting for the council to finish.</p>';try{const c=await api("/api/council",{method:"POST",body:JSON.stringify({topic,roles,rounds:1})});showCouncil(c);await refresh();showCouncil(c);toast("Council meeting completed");}catch(err){toast(err.message);$("#transcript").classList.add("empty-state")}finally{btn.disabled=false;btn.innerHTML='Start Council Meeting <span aria-hidden="true">→</span>'}});
 
-refresh();
 
 async function refreshApprovals(){
  try{
@@ -188,4 +187,34 @@ workspacePrompt?.addEventListener("keydown", event => {
  });
  const prompt=$("#workspace-prompt");
  prompt?.addEventListener("input",()=>{prompt.style.height="auto";prompt.style.height=Math.min(prompt.scrollHeight,240)+"px";});
+const authGate=$("#auth-gate"), appShell=$("#app-shell"), authForm=$("#auth-form"), authError=$("#auth-error"), authSetup=$("#auth-setup"), authPassword=$("#auth-password"), authLogout=$("#auth-logout");
+function showAuthGate(message, setup=false){
+  authGate.hidden=false; appShell.hidden=true; authSetup.hidden=!setup;
+  authForm.hidden=setup; $("#auth-description").textContent=setup?"Workspace access is locked until the server-side credentials are configured.":(message||"Your workspace is protected. Sign in to continue.");
+  if(setup) $("#auth-title").textContent="Workspace setup required";
+  else {$("#auth-title").textContent="Sign in to your workspace";authPassword.focus();}
+}
+function showWorkspace(){
+  authGate.hidden=true;appShell.hidden=false;authLogout.hidden=!window.__cfaAuthRequired;refresh();
+}
+async function bootstrapAuth(){
+  try{
+    const status=await api("/api/auth/status");
+    window.__cfaAuthRequired=!!status.required;
+    if(status.required&&!status.configured){showAuthGate(status.setup_message,true);return;}
+    if(status.required&&!status.authenticated){showAuthGate();return;}
+    showWorkspace();
+  }catch(e){showAuthGate("Could not verify access configuration. Reload and try again.");}
+}
+authForm?.addEventListener("submit",async e=>{
+  e.preventDefault();const btn=$("#auth-submit");btn.disabled=true;authError.hidden=true;
+  try{await api("/api/auth/login",{method:"POST",body:JSON.stringify({password:authPassword.value})});authPassword.value="";showWorkspace();}
+  catch(err){authError.textContent=err.message;authError.hidden=false;}
+  finally{btn.disabled=false;}
+});
+authLogout?.addEventListener("click",async()=>{
+  try{await api("/api/auth/logout",{method:"POST"});}catch{}
+  showAuthGate("You have signed out.");
+});
+bootstrapAuth();
 })();
