@@ -77,7 +77,7 @@ function renderResult(data){
   html+='<p class="verdict"><strong>Preliminary verdict: '+escapeHtml(memo.verdict||'Review required')+'</strong></p>';
   html+='<p>'+escapeHtml(memo.recommendation||memo.rationale||'')+'</p>';
   html+='<div class="notice"><strong>Self-assessment only.</strong> '+escapeHtml(data.disclaimer||'This is not a security test, audit, or certification.')+'</div>';
-  if(!data.model_configured)html+='<div class="warning">No model review was completed. The memo uses deterministic rules only; no model-generated perspectives or synthesis are included.</div>';
+  if(!data.model_configured)html+='<div class="warning">No model review was completed. The memo uses deterministic rules only; no model-generated perspectives or synthesis are included.</div>';if(data.storage_durable===false)html+='<div class="warning">Temporary storage: this deployment cannot guarantee that the result survives an instance restart. Private sharing is disabled until persistent storage is configured.</div>';
   html+=section('Key findings',findings.length?findings.map(f=>'<article class="finding"><h3><span class="severity '+escapeHtml(f.severity)+'">'+escapeHtml(f.severity)+'</span>'+escapeHtml(f.title)+'</h3><p>'+escapeHtml(f.detail)+'</p><p class="smallprint">Triggered by: '+escapeHtml(f.triggered_by?.field||'Unknown')+' · '+escapeHtml(JSON.stringify(f.triggered_by?.answer??'Not provided'))+'</p></article>').join(''):'<p>No deterministic rule findings were triggered. This is not a launch approval.</p>');
   html+=section('Rationale','<p>'+escapeHtml(memo.rationale||memo.recommendation||'')+'</p>');
   html+=section('Options considered',list(memo.options_considered||memo.options));
