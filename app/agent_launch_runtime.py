@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import httpx
 
+from .db import connect_db, database_url
 from .agent_launch_rules import evaluate_agent_launch, PLAYBOOK_VERSION
 
 
@@ -23,15 +24,11 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(db_path, timeout=15)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA busy_timeout = 15000")
-    return db
+def _connect(db_path: Path | None):
+    return connect_db(db_path)
 
 
-def init_review_tables(db_path: Path) -> None:
+def init_review_tables(db_path: Path | None = None) -> None:
     with _connect(db_path) as db:
         db.executescript("""
         CREATE TABLE IF NOT EXISTS review_submissions (
@@ -262,7 +259,7 @@ async def create_review(db_path: Path, answers: dict[str, Any], request_id: str 
     return result
 
 
-def get_review_by_token(db_path: Path, token: str) -> dict[str, Any] | None:
+def get_review_by_token(db_path: Path | None, token: str) -> dict[str, Any] | None:
     with _connect(db_path) as db:
         row = db.execute("SELECT result_json FROM review_results WHERE share_token=?", (token,)).fetchone()
     return json.loads(row["result_json"]) if row else None
@@ -306,7 +303,7 @@ def create_test_request(db_path: Path, submission_id: str, payload: dict[str, An
     return request_id
 
 
-def delete_review(db_path: Path, review_id: str) -> bool:
+def delete_review(db_path: Path | None, review_id: str) -> bool:
     with _connect(db_path) as db:
         exists = db.execute("SELECT 1 FROM review_submissions WHERE id=?", (review_id,)).fetchone()
         if not exists:
