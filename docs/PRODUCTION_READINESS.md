@@ -22,7 +22,7 @@ The application intentionally reports `production_ready: false`. Do not use the 
    - For production, integrate an identity provider with individual accounts, MFA, organization membership, role-based access control, session revocation, audit trails, and tenant-scoped database access.
    - Until the shared-password gate is configured, Vercel-hosted workspace API routes return 503 rather than allowing anonymous access.
 3. **Secrets**
-   - In Vercel Project Settings → Environment Variables, set `CFA_ACCESS_PASSWORD` (at least 16 characters) and `CFA_SESSION_SECRET` (at least 32 random characters). Use encrypted/sensitive values, production scope, and redeploy.
+   - `CFA_ACCESS_PASSWORD` (generated 32-character value) and `CFA_SESSION_SECRET` (generated 64-character value) have now been set as sensitive Vercel environment variables for production, preview, and development. Values are intentionally not stored in this repository. Vercel must create a new deployment for these settings to become available to an already-built deployment.
    - To enable model-backed Council/review calls, set `GEMINI_API_KEY` as a server-side encrypted environment variable. The model is not enabled by source code alone.
    - Email unlock and Authorization Test intake on Vercel require a durable PostgreSQL database and `CFA_PRIVACY_NOTICE_URL` pointing to a public HTTPS privacy notice. Set `CRON_SECRET` for the daily retention job.
    - Never commit or place any of these values in browser code, tickets, or source control.
