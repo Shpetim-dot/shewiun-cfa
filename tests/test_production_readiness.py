@@ -46,7 +46,7 @@ def test_configured_workspace_requires_login_and_accepts_signed_session(monkeypa
             headers={"Origin": "https://attacker.example"},
             json={"name": "Cross-origin attempt", "description": ""},
         ).status_code == 403
-        assert client.post("/api/auth/logout").status_code == 200
+        assert client.post("/api/auth/logout", headers={"Origin": "https://testserver"}).status_code == 200
         assert client.get("/api/projects").status_code == 401
 
 
