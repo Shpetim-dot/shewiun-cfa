@@ -8,7 +8,21 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="app-shell">
+<section class="auth-gate" id="auth-gate" hidden aria-labelledby="auth-title">
+  <div class="auth-panel">
+    <div class="auth-brand"><span class="brand-mark">S</span><span><b>SHEWIUN</b><small>WORKSPACE ACCESS</small></span></div>
+    <h1 id="auth-title">Sign in to your workspace</h1>
+    <p id="auth-description">Your workspace is protected. Sign in to continue.</p>
+    <form id="auth-form">
+      <label for="auth-password">Workspace password</label>
+      <input id="auth-password" type="password" autocomplete="current-password" minlength="16" required>
+      <button class="btn primary" id="auth-submit" type="submit">Sign in <span aria-hidden="true">→</span></button>
+      <p class="auth-error" id="auth-error" role="alert" hidden></p>
+    </form>
+    <p class="auth-setup" id="auth-setup" hidden>Authentication is not configured. In Vercel Project Settings → Environment Variables, set <code>CFA_ACCESS_PASSWORD</code> (16+ characters) and <code>CFA_SESSION_SECRET</code> (32+ random characters), then redeploy.</p>
+  </div>
+</section>
+<div class="app-shell" id="app-shell">
   <aside class="sidebar">
     <a class="brand" href="#"><span class="brand-mark">S</span><span><b>SHEWIUN</b><small>WORKSPACE</small></span></a>
     <button class="sidebar-new-task" id="sidebar-new-task" type="button"><span>＋</span> New task <kbd>↵</kbd></button><div class="workspace-label">Personal workspace <span aria-hidden="true">⌄</span></div><button class="sidebar-search" id="open-command-palette" type="button"><span>Search tasks and actions…</span><kbd>⌘ K</kbd></button>
@@ -21,7 +35,7 @@
     </nav>
     <div class="sidebar-bottom">
       <div class="system-card" id="system-status" aria-live="polite"><span class="status-pip"></span><div><b id="health-title">Checking runtime…</b><small id="mode-label">Reading actual system status</small></div></div>
-      <div class="user-row"><div class="avatar">S</div><div><b>Personal workspace</b><small>Local workspace</small></div><button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle theme">◐</button></div>
+      <div class="user-row"><div class="avatar">S</div><div><b>Personal workspace</b><small>Private workspace</small></div><button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle theme">◐</button></div><button class="auth-logout" id="auth-logout" type="button" hidden>Sign out</button>
     </div>
   </aside>
   <main class="main">
