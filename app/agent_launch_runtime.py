@@ -83,6 +83,14 @@ def _schema_prompt(role: str) -> str:
         "Builder": "Create a practical control plan: least-privilege scopes, approval gates and thresholds, limits, logging, monitoring, staged rollout, and owners. Distinguish user-reported controls from proposed controls.",
         "Synthesis": "Synthesize the three perspectives and deterministic findings into a memo. The deterministic rules are authoritative. Never recommend unconditional Go when any critical deterministic finding exists. Use Conditional Go or No-Go and list explicit conditions."
     }
+    if role == "Synthesis":
+        shared += (
+            " Synthesis must additionally include: "
+            '{"verdict":"Go|Conditional Go|No-Go","recommendation":string,"rationale":string,'
+            '"options_considered":[string],"key_risks":[object],"assumptions_ledger":[object],'
+            '"next_steps":[object],"confidence":{"level":string,"justification":string},'
+            '"open_questions":[string],"limitations":string}.'
+        )
     return shared + "\nReviewer role: " + role + ". " + role_instructions[role]
 
 
@@ -113,10 +121,17 @@ async def _call_model(role: str, answers: dict[str, Any], findings: list[dict[st
         response.raise_for_status()
         raw = response.json()["choices"][0]["message"]["content"]
     parsed = json.loads(raw)
-    for field in ("summary", "options", "risks", "assumptions", "recommendations",
-                  "premortem", "kill_criteria", "what_would_change_recommendation"):
+    required = ["summary", "options", "risks", "assumptions", "recommendations",
+                 "premortem", "kill_criteria", "what_would_change_recommendation"]
+    if role == "Synthesis":
+        required.extend(["verdict", "recommendation", "rationale", "options_considered",
+                         "key_risks", "assumptions_ledger", "next_steps", "confidence",
+                         "open_questions", "limitations"])
+    for field in required:
         if field not in parsed:
             raise ValueError(f"{role} response missing required field: {field}")
+    if role == "Synthesis" and parsed["verdict"] not in {"Go", "Conditional Go", "No-Go"}:
+        raise ValueError("Synthesis returned an invalid verdict")
     if not isinstance(parsed["risks"], list) or not isinstance(parsed["assumptions"], list):
         raise ValueError(f"{role} response has invalid structured fields")
     return parsed
@@ -158,10 +173,14 @@ def _fallback_memo(findings: list[dict[str, Any]]) -> dict[str, Any]:
 def _enforce_rules(memo: dict[str, Any], findings: list[dict[str, Any]]) -> dict[str, Any]:
     critical = [f for f in findings if f["severity"] == "critical"]
     high = [f for f in findings if f["severity"] == "high"]
-    if critical and memo.get("verdict") == "Go":
+    verdict = str(memo.get("verdict", "")).strip().lower()
+    valid_verdicts = {"go": "Go", "conditional go": "Conditional Go", "no-go": "No-Go"}
+    memo["verdict"] = valid_verdicts.get(verdict, "Review required")
+    if critical and memo["verdict"] in {"Go", "Review required"}:
+
         memo["verdict"] = "No-Go"
         memo["recommendation"] = "No-Go until the critical control gaps listed below are resolved and validated."
-    elif high and memo.get("verdict") == "Go":
+    elif high and memo["verdict"] in {"Go", "Review required"}:
         memo["verdict"] = "Conditional Go"
         memo["recommendation"] = "Conditional Go only after the high-severity control gaps are addressed or explicitly accepted by the accountable owner."
     memo["key_risks"] = findings
