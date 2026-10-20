@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS review_leads (
   consent INTEGER NOT NULL, created_at TEXT NOT NULL,
   FOREIGN KEY(submission_id) REFERENCES review_submissions(id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_leads_submission_email ON review_leads(submission_id, email);
 CREATE TABLE IF NOT EXISTS review_test_requests (
   id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, request_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
