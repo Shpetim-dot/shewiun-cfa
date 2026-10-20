@@ -5,3 +5,5 @@
 .role-avatar{display:grid;place-items:center}
 
 .project-symbol svg,.activity-mark svg,.message-avatar svg,.round-icon svg,.stat-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.message-avatar,.round-icon,.project-symbol,.activity-mark{display:grid;place-items:center}
+
+[hidden]{display:none!important}
