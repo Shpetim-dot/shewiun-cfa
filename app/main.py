@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -44,43 +47,107 @@ app = FastAPI(title="Shewiun CFA", version="0.2.0", description="Control & Focus
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 _RATE_BUCKETS: dict[str, list[float]] = {}
-_RATE_LIMIT_PATHS = {"/api/runtime/runs", "/api/council", "/api/review/agent-launch/assess"}
+_RATE_LIMIT_PATHS = {
+    "/api/auth/login": 5,
+    "/api/runtime/runs": 10,
+    "/api/council": 10,
+    "/api/review/agent-launch/assess": 10,
+}
+_AUTH_PROTECTED_PREFIXES = (
+    "/api/projects", "/api/brain", "/api/agents", "/api/council",
+    "/api/activity", "/api/security", "/api/runtime",
+)
+
+
+def auth_required() -> bool:
+    configured = os.getenv("CFA_REQUIRE_AUTH", "").lower() in {"1", "true", "yes"}
+    return IS_VERCEL or configured
+
+
+def auth_configured() -> bool:
+    password = os.getenv("CFA_ACCESS_PASSWORD", "")
+    secret = os.getenv("CFA_SESSION_SECRET", "")
+    return len(password) >= 16 and len(secret) >= 32
+
+
+def _session_token(expiry: int) -> str:
+    secret = os.getenv("CFA_SESSION_SECRET", "").encode()
+    payload = str(expiry).encode()
+    encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    signature = hmac.new(secret, encoded.encode(), hashlib.sha256).hexdigest()
+    return encoded + "." + signature
+
+
+def _valid_session(token: str | None) -> bool:
+    if not token or not auth_configured():
+        return False
+    try:
+        encoded, signature = token.split(".", 1)
+        expected = hmac.new(os.getenv("CFA_SESSION_SECRET", "").encode(), encoded.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return False
+        payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        return int(payload.decode()) > int(time.time())
+    except (ValueError, TypeError, UnicodeDecodeError):
+        return False
+
+
+def _is_protected_api(path: str) -> bool:
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in _AUTH_PROTECTED_PREFIXES)
+
+
+def _same_origin(request: Request) -> bool:
+    origin = request.headers.get("origin")
+    if not origin:
+        return False
+    return origin.rstrip("/") == f"{request.url.scheme}://{request.headers.get('host', '')}".rstrip("/")
+
 
 @app.middleware("http")
-async def security_headers(request: Request, call_next):
-    if request.url.path in _RATE_LIMIT_PATHS:
-        client_ip = request.client.host if request.client else "unknown"
-        bucket_key = request.url.path + ":" + client_ip
-        now_mono = time.monotonic()
-        hits = [stamp for stamp in _RATE_BUCKETS.get(bucket_key, []) if now_mono - stamp < 60]
-        if len(hits) >= 30:
-            return JSONResponse(status_code=429, content={"detail": "Rate limit reached. Wait one minute and retry."},
-                                headers={"Retry-After": "60"})
-        hits.append(now_mono)
-        _RATE_BUCKETS[bucket_key] = hits
-        if len(_RATE_BUCKETS) > 2000:
-            for key in list(_RATE_BUCKETS)[:500]:
-                if not _RATE_BUCKETS[key] or now_mono - _RATE_BUCKETS[key][-1] >= 60:
-                    _RATE_BUCKETS.pop(key, None)
+async def security_and_access_middleware(request: Request, call_next):
+    path = request.url.path
+    now_mono = time.monotonic()
+    rate_limit = _RATE_LIMIT_PATHS.get(path)
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        if rate_limit is None and path.startswith("/api/"):
+            rate_limit = 60
+        if rate_limit is not None:
+            client_ip = request.client.host if request.client else "unknown"
+            bucket_key = path + ":" + client_ip
+            hits = [stamp for stamp in _RATE_BUCKETS.get(bucket_key, []) if now_mono - stamp < 60]
+            if len(hits) >= rate_limit:
+                response = JSONResponse(status_code=429, content={"detail": "Rate limit reached. Wait one minute and retry."},
+                                         headers={"Retry-After": "60"})
+                return _apply_security_headers(response)
+            hits.append(now_mono)
+            _RATE_BUCKETS[bucket_key] = hits
+            if len(_RATE_BUCKETS) > 2000:
+                for key in list(_RATE_BUCKETS)[:500]:
+                    if not _RATE_BUCKETS[key] or now_mono - _RATE_BUCKETS[key][-1] >= 60:
+                        _RATE_BUCKETS.pop(key, None)
     content_length = request.headers.get("content-length")
     if content_length:
         try:
             if int(content_length) > 1_000_000:
-                return JSONResponse(status_code=413, content={"detail": "Request body too large."})
+                return _apply_security_headers(JSONResponse(status_code=413, content={"detail": "Request body too large."}))
         except ValueError:
-            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
-    response = await call_next(request)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
-    return response
+            return _apply_security_headers(JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."}))
 
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
+    if auth_required() and _is_protected_api(path):
+        if not auth_configured():
+            return _apply_security_headers(JSONResponse(status_code=503, content={
+                "detail": "Workspace access is locked until CFA_ACCESS_PASSWORD (minimum 16 characters) and CFA_SESSION_SECRET (minimum 32 characters) are configured in the server environment."
+            }))
+        if not _valid_session(request.cookies.get("cfa_session")):
+            return _apply_security_headers(JSONResponse(status_code=401, content={"detail": "Sign in to access the workspace."}))
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not _same_origin(request):
+            return _apply_security_headers(JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected."}))
+
     response = await call_next(request)
+    return _apply_security_headers(response)
+
+
+def _apply_security_headers(response):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -252,19 +319,76 @@ def home() -> FileResponse:
     return FileResponse(STATIC / "index.html")
 
 
+class LoginIn(BaseModel):
+    password: str = Field(min_length=1, max_length=512)
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request) -> dict[str, Any]:
+    required = auth_required()
+    configured = auth_configured()
+    return {
+        "required": required,
+        "configured": configured,
+        "authenticated": (not required) or _valid_session(request.cookies.get("cfa_session")),
+        "setup_message": (
+            "Configure CFA_ACCESS_PASSWORD (16+ characters) and CFA_SESSION_SECRET (32+ characters) in Vercel Environment Variables."
+            if required and not configured else None
+        ),
+    }
+
+
+@app.post("/api/auth/login")
+def auth_login(item: LoginIn, request: Request):
+    if not auth_required():
+        return {"ok": True, "auth_required": False}
+    if not auth_configured():
+        raise HTTPException(status_code=503, detail="Workspace authentication is not configured.")
+    if not hmac.compare_digest(item.password, os.getenv("CFA_ACCESS_PASSWORD", "")):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    expiry = int(time.time()) + 8 * 60 * 60
+    response = JSONResponse({"ok": True, "expires_in": 8 * 60 * 60})
+    response.set_cookie(
+        "cfa_session", _session_token(expiry), max_age=8 * 60 * 60, httponly=True,
+        secure=(request.url.scheme == "https" or IS_VERCEL), samesite="strict", path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("cfa_session", path="/", httponly=True, secure=IS_VERCEL, samesite="strict")
+    return response
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "app": "Shewiun CFA",
-        "version": "0.2.0",
+        "version": "0.3.0",
+        "auth_required": auth_required(),
+        "auth_configured": auth_configured(),
+        "authentication": "configured" if auth_configured() else ("required_but_missing" if auth_required() else "development_open"),
         "model_configured": model_provider_configured(),
         "model_provider": "Google Gemini API" if os.getenv("GEMINI_API_KEY") else ("OpenAI-compatible" if os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME") else None),
         "model_name": configured_model_name(),
         "free_agent_available": True,
         "free_agent_name": "Gemini Flash (API key required; free-tier availability depends on Google account and current limits)",
         "database": "sqlite",
-        "storage_persistent": not IS_VERCEL,
+        "storage_persistent": False,
+        "database_backend": "sqlite",
+        "distributed_rate_limits": False,
+        "durable_queue": False,
+        "production_ready": False,
+        "readiness_blockers": [
+            *(["workspace authentication secrets are not configured"] if auth_required() and not auth_configured() else []),
+            "persistent PostgreSQL storage is not configured",
+            "rate limiting is process-local, not distributed",
+            "background orchestration queue is process-local",
+            *(["model provider key is not configured"] if not model_provider_configured() else []),
+        ],
         "queue": "in_process",
         "storage": "ephemeral_sqlite" if IS_VERCEL else "sqlite",
         "storage_warning": (
