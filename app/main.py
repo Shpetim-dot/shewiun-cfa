@@ -674,5 +674,5 @@ async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
     result["findings"] = result["deterministic"]["findings"]
     result["finding_count"] = result["deterministic"]["finding_count"]
     result["note"] = ("Model-backed perspectives and synthesis completed." if result["model_configured"]
-                      else "No model was used. This is a deterministic self-assessment preview only.")
+                      else "No model was called. This is a deterministic self-assessment preview only.")
     return result
