@@ -448,7 +448,7 @@ kbd{font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-3);bo
 .palette-items button{display:flex;justify-content:space-between;width:100%;padding:10px;border:0;border-radius:7px;background:transparent;color:var(--text);text-align:left}
 .palette-items button:hover{background:var(--surface-2)}
 .app-shell.sidebar-collapsed .sidebar{width:56px;padding:16px 6px}
-.app-shell.sidebar-collapsed .brand>span:not(.brand-mark),.app-shell.sidebar-collapsed .sidebar-new-task,.app-shell.sidebar-collapsed .workspace-label,.app-shell.sidebar-collapsed .sidebar-search,.app-shell.sidebar-collapsed #nav .nav-item:not(.active),.app-shell.sidebar-collapsed #nav .nav-item.active:not([data-view]),.app-shell.sidebar-collapsed .system-card,.app-shell.sidebar-collapsed .user-row>div:not(.avatar),.app-shell.sidebar-collapsed .theme-toggle{display:none}
+.app-shell.sidebar-collapsed .brand>span:not(.brand-mark),.app-shell.sidebar-collapsed .sidebar-new-task,.app-shell.sidebar-collapsed .workspace-label,.app-shell.sidebar-collapsed .sidebar-search,.app-shell.sidebar-collapsed .system-card,.app-shell.sidebar-collapsed .user-row>div:not(.avatar),.app-shell.sidebar-collapsed .theme-toggle{display:none}.app-shell.sidebar-collapsed #nav .nav-item{font-size:0;justify-content:center;padding:10px 0}.app-shell.sidebar-collapsed #nav .nav-item>span{font-size:15px}.app-shell.sidebar-collapsed #nav .nav-item small{display:none}
 .app-shell.sidebar-collapsed .main{margin-left:56px}
 @media(max-width:760px){
  .sidebar{width:56px;padding:14px 6px}
