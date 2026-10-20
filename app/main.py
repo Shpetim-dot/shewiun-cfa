@@ -22,7 +22,8 @@ from pydantic import BaseModel, Field
 
 from .db import DATABASE_ERRORS, connect_db, database_backend, database_url
 from .agent_launch_rules import evaluate_agent_launch
-from .agent_launch_runtime import create_review, get_review_by_token, init_review_tables
+from .agent_launch_runtime import create_review, get_review_by_token, init_review_tables, _preview_result
+from .agent_launch_api import router as agent_launch_router, email_capture_enabled, lead_gate_enabled, privacy_notice_url
 
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,6 +47,7 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Shewiun CFA", version="0.2.0", description="Control & Focus Architecture")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+app.include_router(agent_launch_router)
 
 _RATE_BUCKETS: dict[str, list[float]] = {}
 _RATE_LIMIT_PATHS = {
@@ -56,7 +58,7 @@ _RATE_LIMIT_PATHS = {
 }
 _AUTH_PROTECTED_PREFIXES = (
     "/api/projects", "/api/brain", "/api/agents", "/api/council",
-    "/api/activity", "/api/security", "/api/runtime",
+    "/api/activity", "/api/security", "/api/runtime", "/api/review/agent-launch/admin",
 )
 
 
@@ -416,6 +418,8 @@ def health() -> dict[str, Any]:
         "database_backend": "sqlite",
         "distributed_rate_limits": database_backend() == "postgresql",
         "durable_queue": False,
+        "email_unlock_configured": email_capture_enabled(),
+        "retention_configured": len(os.getenv("CRON_SECRET", "")) >= 32,
         "production_ready": False,
         "readiness_blockers": [
             *(["workspace authentication secrets are not configured"] if auth_required() and not auth_configured() else []),
@@ -423,6 +427,8 @@ def health() -> dict[str, Any]:
             *(["rate limiting is process-local, not distributed"] if database_backend() != "postgresql" else []),
             "background orchestration queue is process-local",
             *(["model provider key is not configured"] if not model_provider_configured() else []),
+            *(["public HTTPS privacy notice is not configured for email capture"] if IS_VERCEL and not privacy_notice_url() else []),
+            *(["CRON_SECRET is not configured for retention automation"] if IS_VERCEL and len(os.getenv("CRON_SECRET", "")) < 32 else []),
         ],
         "queue": "in_process",
         "storage": "postgresql" if database_backend() == "postgresql" else ("ephemeral_sqlite" if IS_VERCEL else "sqlite"),
@@ -923,4 +929,4 @@ async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
     result["finding_count"] = result["deterministic"]["finding_count"]
     result["note"] = ("Model-backed perspectives and synthesis completed." if result["model_configured"]
                       else "No model was called. This is a deterministic self-assessment preview only.")
-    return result
+    return _preview_result(result) if lead_gate_enabled() else result
