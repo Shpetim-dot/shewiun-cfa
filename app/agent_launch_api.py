@@ -14,6 +14,7 @@ from .agent_launch_runtime import (
     get_review_by_token,
     list_test_requests,
     purge_expired_review_data,
+    record_analytics,
     review_analytics_summary,
     _preview_result,
 )
@@ -53,6 +54,12 @@ def _valid_email(email: str) -> bool:
     return bool(re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", email.strip()))
 
 
+class ReviewEventIn(BaseModel):
+    event_name: str = Field(min_length=1, max_length=40)
+    share_token: str | None = Field(default=None, min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class ReviewLeadUnlockIn(BaseModel):
     share_token: str = Field(min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$")
     email: str = Field(min_length=3, max_length=254)
@@ -67,6 +74,27 @@ class AuthorizationTestRequestIn(BaseModel):
     role: str = Field(min_length=1, max_length=160)
     use_case: str = Field(min_length=10, max_length=3000)
     consent: bool
+
+
+@router.post("/api/review/agent-launch/event")
+def record_agent_launch_event(item: ReviewEventIn) -> dict[str, Any]:
+    allowed = {"page_view", "step_completed", "result_viewed", "pdf_downloaded", "cta_clicked"}
+    if item.event_name not in allowed:
+        raise HTTPException(status_code=400, detail="Unsupported analytics event.")
+    if len(str(item.metadata).encode("utf-8")) > 2048:
+        raise HTTPException(status_code=413, detail="Analytics metadata exceeds 2 KB.")
+    if _main().IS_VERCEL and _main().database_backend() != "postgresql":
+        raise HTTPException(status_code=503, detail="Analytics storage requires persistent PostgreSQL.")
+    submission_id = None
+    if item.share_token:
+        result = get_review_by_token(_db_path(), item.share_token)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Review not found.")
+        submission_id = result["id"]
+    elif item.event_name not in {"page_view", "step_completed"}:
+        raise HTTPException(status_code=400, detail="A valid review token is required for this event.")
+    record_analytics(_db_path(), item.event_name, submission_id, item.metadata)
+    return {"status": "recorded"}
 
 
 @router.post("/api/review/agent-launch/unlock")
@@ -87,6 +115,8 @@ def unlock_agent_launch_memo(item: ReviewLeadUnlockIn) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     unlocked = get_review_by_token(_db_path(), item.share_token)
+    if unlocked:
+        unlocked["privacy_notice_url"] = privacy_notice_url()
     return unlocked or result
 
 
