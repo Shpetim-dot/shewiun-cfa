@@ -29,7 +29,7 @@ def test_configured_workspace_requires_login_and_accepts_signed_session(monkeypa
     _configure_production(monkeypatch, tmp_path)
     monkeypatch.setenv("CFA_ACCESS_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.setenv("CFA_SESSION_SECRET", "s" * 48)
-    with TestClient(main.app) as client:
+    with TestClient(main.app, base_url="https://testserver") as client:
         assert client.get("/api/projects").status_code == 401
         login = client.post("/api/auth/login", json={"password": "correct-horse-battery-staple"})
         assert login.status_code == 200
@@ -37,7 +37,7 @@ def test_configured_workspace_requires_login_and_accepts_signed_session(monkeypa
         assert client.get("/api/projects").status_code == 200
         created = client.post(
             "/api/projects",
-            headers={"Origin": "http://testserver"},
+            headers={"Origin": "https://testserver"},
             json={"name": "Private workspace test", "description": "Temporary test record"},
         )
         assert created.status_code == 200
