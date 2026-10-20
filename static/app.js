@@ -38,28 +38,44 @@ $("#refresh-approvals")?.addEventListener("click",refreshApprovals);
 $("#verify-audit")?.addEventListener("click",async()=>{try{const result=await api("/api/security/audit/verify");$("#audit-integrity").textContent=result.valid?"Integrity valid · "+result.checked+" events checked":"Integrity check failed at event "+result.failed_event_id;$("#audit-integrity").className="integrity-line "+(result.valid?"valid":"invalid");}catch(e){toast(e.message)}});
 
 
-// Conversation-first workspace composer backed by the durable runtime queue.
+// Workspace task composer and minimal blue CFA mascot.
 const workspaceForm = $("#workspace-form");
 const workspacePrompt = $("#workspace-prompt");
 const workspaceResponse = $("#workspace-response");
-$$("#workspace-form [data-prompt], [data-prompt]").forEach(button => button.addEventListener("click", () => {
-  workspacePrompt.value = button.dataset.prompt || "";
-  workspacePrompt.focus();
-}));
-
+const workspaceMascot = $("#workspace-mascot");
+function setMascotMode(mode) {
+  if (!workspaceMascot) return;
+  workspaceMascot.classList.toggle("is-looking", mode === "looking" || mode === "working");
+  workspaceMascot.classList.toggle("is-working", mode === "working");
+}
+workspacePrompt?.addEventListener("input", () => {
+  setMascotMode(workspacePrompt.value.trim() ? "looking" : "idle");
+});
+workspacePrompt?.addEventListener("focus", () => {
+  if (workspacePrompt.value.trim()) setMascotMode("looking");
+});
+workspacePrompt?.addEventListener("blur", () => {
+  if (!workspacePrompt.value.trim()) setMascotMode("idle");
+});
+$("#sidebar-new-task")?.addEventListener("click", () => {
+  switchView("overview");
+  workspacePrompt?.focus();
+  workspacePrompt?.scrollIntoView({behavior:"smooth",block:"center"});
+});
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 function renderRuntimeProgress(topic, run) {
   const transcript = run?.state?.transcript || [];
   const status = run?.status || "queued";
   const completed = transcript.length;
   const total = run?.state?.roles?.length || 4;
+  setMascotMode(["queued","running"].includes(status) ? "working" : "idle");
   workspaceResponse.hidden = false;
   workspaceResponse.innerHTML =
-    '<div class="workspace-response-head"><span class="composer-mark">✳</span><b>CFA Council</b><small>' +
+    '<div class="workspace-response-head"><span class="response-agent-dot" aria-hidden="true"><i></i><i></i></span><b>CFA Council</b><small>' +
     esc(status.toUpperCase()) + '</small></div>' +
     '<p class="workspace-user-prompt"></p>' +
     '<div class="runtime-progress" role="status" aria-live="polite"><div class="runtime-progress-top"><span>' +
-    (status === "completed" ? "Council completed" : status === "failed" ? "Run failed" : "Working through perspectives…") +
+    (status === "completed" ? "Recommendation ready" : status === "failed" ? "Run failed" : "Council is reviewing your task") +
     '</span><b>' + completed + ' / ' + total + '</b></div><div class="runtime-progress-track"><span style="width:' +
     Math.min(100, Math.round(completed / Math.max(total, 1) * 100)) + '%"></span></div></div>' +
     transcript.map(message => '<article class="workspace-answer ' +
@@ -72,7 +88,6 @@ function renderRuntimeProgress(topic, run) {
     workspaceResponse.querySelector(".response-error").textContent = run.error || "The run failed. Retry with a narrower prompt.";
   }
 }
-
 workspaceForm?.addEventListener("submit", async event => {
   event.preventDefault();
   const topic = workspacePrompt.value.trim();
@@ -83,16 +98,17 @@ workspaceForm?.addEventListener("submit", async event => {
   }
   const send = $("#workspace-send");
   send.disabled = true;
-  send.innerHTML = "Starting…";
+  setMascotMode("working");
+  send.innerHTML = 'Working <span class="button-spinner" aria-hidden="true"></span>';
   workspaceResponse.hidden = false;
-  workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="composer-mark">✳</span><b>Starting CFA Council</b><small>QUEUED</small></div><p class="workspace-user-prompt"></p><div class="workspace-answer"><p>Creating a durable run and preparing the agent sequence…</p></div>';
+  workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="response-agent-dot is-animated" aria-hidden="true"><i></i><i></i></span><b>CFA Council</b><small>PREPARING</small></div><p class="workspace-user-prompt"></p><div class="workspace-answer"><p>Setting up the task and preparing the Council perspectives…</p></div>';
   workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
+  workspaceResponse.scrollIntoView({behavior:"smooth",block:"nearest"});
   try {
     const created = await api("/api/runtime/runs", {
       method: "POST",
       body: JSON.stringify({topic, roles:["Strategist","Skeptic","Builder"], rounds:1})
     });
-    send.innerHTML = "Working…";
     let run = null;
     const deadline = Date.now() + 120000;
     while (Date.now() < deadline) {
@@ -102,25 +118,28 @@ workspaceForm?.addEventListener("submit", async event => {
       await wait(900);
     }
     if (!run || !["completed", "failed", "cancelled"].includes(run.status)) {
-      workspaceResponse.innerHTML += '<p class="response-error">This run is still processing in the background. Open CFA Council history to inspect it shortly.</p>';
-      toast("Run continues in the background");
+      workspaceResponse.innerHTML += '<p class="response-error">This task is still running. Check CFA Council for its status shortly.</p>';
+      toast("Task continues in the background");
       return;
     }
     if (run.status === "completed") {
       workspacePrompt.value = "";
+      setMascotMode("idle");
       await refresh();
-      toast("Council session completed");
+      toast("Recommendation ready");
     } else if (run.status === "cancelled") {
-      toast("Council run cancelled");
+      toast("Task cancelled");
     } else {
-      toast("Council run failed");
+      toast("Task failed");
     }
   } catch (error) {
-    workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="composer-mark">!</span><b>Could not start the request</b></div><p class="response-error"></p>';
+    setMascotMode("idle");
+    workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="response-agent-dot" aria-hidden="true"><i></i><i></i></span><b>Could not start task</b></div><p class="response-error"></p>';
     workspaceResponse.querySelector(".response-error").textContent = error.message || "Unexpected error. Try again.";
   } finally {
     send.disabled = false;
-    send.innerHTML = 'Start working <span>↑</span>';
+    send.innerHTML = 'Start task <span>↑</span>';
+    if (!workspacePrompt.value.trim()) setMascotMode("idle");
   }
 });
 workspacePrompt?.addEventListener("keydown", event => {
@@ -129,3 +148,4 @@ workspacePrompt?.addEventListener("keydown", event => {
     workspaceForm.requestSubmit();
   }
 });
+
