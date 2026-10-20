@@ -57,14 +57,18 @@ def test_runtime_rejects_missing_model_without_fabricating_result(tmp_path, monk
         assert client.get("/api/runtime/runs").json() == []
 
 
-def test_direct_council_rejects_missing_model(tmp_path, monkeypatch):
+def test_direct_council_uses_free_fallback_without_model(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "DB_PATH", tmp_path / "no-model-council.db")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("CFA_MODEL_API_KEY", raising=False)
     monkeypatch.delenv("CFA_MODEL_NAME", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("CFA_DATABASE_URL", raising=False)
     with TestClient(main.app) as client:
         response = client.post("/api/council", json={"topic": "Should we ship this?"})
-        assert response.status_code == 503
-        assert "No model configured" in response.json()["detail"]
+        assert response.status_code == 200
+        assert response.json()["mode"] == "local-free"
+        assert any(item["role"] == "Synthesizer" for item in response.json()["transcript"])
 
 
 
