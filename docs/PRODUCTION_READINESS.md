@@ -1,5 +1,11 @@
 # Production readiness — Shewiun CFA
 
+## Current product implementation
+- The task composer uses the built-in Local Planner when no model key is configured. It is a deterministic, rules-based helper, not an LLM. Model-backed generation remains optional.
+- The workspace supports creating named agents with roles, icons and optional instructions; custom agents are stored in the configured database.
+- CFA Brain now has Graph and Entries views. Explicit note links are shown as graph edges, and agent runs can be saved as decisions for later retrieval. This is curated memory, not autonomous model self-modification.
+- Product positioning, design direction, pricing hypotheses, validation interviews and go-to-market steps are in [PRODUCT_AND_GO_TO_MARKET.md](PRODUCT_AND_GO_TO_MARKET.md).
+
 ## Current release gate
 
 The application intentionally reports `production_ready: false`. Do not use the current SQLite/in-process runtime for confidential data or reliability-critical workflows.
