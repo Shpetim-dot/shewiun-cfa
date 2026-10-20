@@ -49,6 +49,7 @@ def test_runtime_rejects_missing_model_without_fabricating_result(tmp_path, monk
     monkeypatch.setattr(main, "DB_PATH", tmp_path / "no-model.db")
     monkeypatch.delenv("CFA_MODEL_API_KEY", raising=False)
     monkeypatch.delenv("CFA_MODEL_NAME", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with TestClient(main.app) as client:
         response = client.post("/api/runtime/runs", json={"topic": "Should we ship this?"})
         assert response.status_code == 503
@@ -64,3 +65,20 @@ def test_direct_council_rejects_missing_model(tmp_path, monkeypatch):
         response = client.post("/api/council", json={"topic": "Should we ship this?"})
         assert response.status_code == 503
         assert "No model configured" in response.json()["detail"]
+
+
+
+def test_gemini_free_tier_is_detected_and_security_headers_are_set(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.delenv("CFA_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("CFA_MODEL_NAME", raising=False)
+    with TestClient(main.app) as client:
+        health = client.get("/api/health")
+        assert health.status_code == 200
+        assert health.json()["model_configured"] is True
+        assert health.json()["model_provider"] == "Google Gemini API"
+        assert health.json()["model_name"] == "gemini-2.5-flash"
+        assert health.json()["free_agent_available"] is True
+        assert health.headers["x-content-type-options"] == "nosniff"
+        assert health.headers["x-frame-options"] == "DENY"
+        assert health.headers["content-security-policy"].find("frame-ancestors 'none'") >= 0
