@@ -63,9 +63,9 @@ def evaluate_agent_launch(answers: dict[str, Any]) -> dict[str, Any]:
         add("ALR-002", "high", "No amount or rate limits reported",
             "Financial actions are reported, but no implemented rate or amount limits were selected.",
             "controls")
-    if any(str(tool.get("credentials", "")).lower() in {"user credentials", "users own credentials", "user's own credentials", "end-user credentials"} for tool in tools if isinstance(tool, dict)) or (write_tools and not separate_identity):
+    if any(str(tool.get("credentials", "")).lower() in {"user credentials", "users own credentials", "user's own credentials", "end-user credentials"} for tool in tools if isinstance(tool, dict)):
         add("ALR-003", "high", "Agent identity boundary is unclear",
-            "At least one tool may use end-user credentials, or a separate agent identity was not established. Confirm credential ownership and scope.",
+            "At least one tool may use end-user credentials. Confirm credential ownership and scope.",
             "tools")
     elif write_tools and not separate_identity:
         add("ALR-003", "high", "Separate agent identity not reported",
