@@ -10,7 +10,7 @@ The application intentionally reports `production_ready: false`. Do not use the 
    - Replace SQLite with PostgreSQL and move all workspace/review records to it.
    - Move the runtime worker from an in-process task loop to a durable queue/worker with idempotent jobs, retries, leases, cancellation, and recovery.
    - Configure backups, restore testing, retention and deletion jobs.
-   - The current app does not consume `DATABASE_URL`; adding the variable alone does not migrate persistence.
+   - The app can use `DATABASE_URL` or `CFA_DATABASE_URL` through the PostgreSQL adapter. A connection string alone is not enough: provision a dedicated database, apply/verify the schema, and test backups and concurrent runtime operations.
 2. **Identity and authorization**
    - Current branch adds a fail-closed shared-password gate for workspace APIs when deployed to Vercel. This is a temporary single-workspace safeguard, not enterprise identity.
    - For production, integrate an identity provider with individual accounts, MFA, organization membership, role-based access control, session revocation, audit trails, and tenant-scoped database access.
