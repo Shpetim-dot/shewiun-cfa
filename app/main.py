@@ -45,7 +45,7 @@ if not DB_PATH.is_absolute():
     DB_PATH = ROOT / DB_PATH
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Shewiun CFA", version="0.2.0", description="Control & Focus Architecture")
+app = FastAPI(title="Shewiun CFA", version="0.3.0", description="Control & Focus Architecture")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 app.include_router(agent_launch_router)
 
@@ -55,6 +55,9 @@ _RATE_LIMIT_PATHS = {
     "/api/runtime/runs": 10,
     "/api/council": 10,
     "/api/review/agent-launch/assess": 10,
+    "/api/review/agent-launch/unlock": 10,
+    "/api/review/agent-launch/authorization-test-request": 5,
+    "/api/review/agent-launch/event": 30,
 }
 _AUTH_PROTECTED_PREFIXES = (
     "/api/projects", "/api/brain", "/api/agents", "/api/council",
