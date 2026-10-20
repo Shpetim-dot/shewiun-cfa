@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -394,6 +395,11 @@ def purge_expired_review_data(db_path: Path | None, retention_days: int = 90) ->
             deleted["submissions"] += db.execute("DELETE FROM review_submissions WHERE id=?", (submission_id,)).rowcount
         deleted["analytics"] += db.execute("DELETE FROM review_analytics WHERE created_at < ?", (cutoff,)).rowcount
         db.execute("DELETE FROM review_rate_limits WHERE window_started_at < ?", (cutoff,))
+        try:
+            db.execute("DELETE FROM api_rate_limits WHERE window_started_at < ?", (time.time() - 86400,))
+        except sqlite3.OperationalError:
+            # Runtime-only tests may initialize review tables without the workspace schema.
+            pass
     return deleted
 
 
