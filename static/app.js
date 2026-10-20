@@ -166,6 +166,9 @@ workspacePrompt?.addEventListener("keydown", event => {
   const action=b.dataset.action;palette.close();
   if(action==="new-task"){switchView("overview");$("#workspace-prompt")?.focus();}
   if(action==="council")switchView("council");
+  if(action==="brain")switchView("brain");
+  if(action==="control")switchView("control");
+  if(action==="security")switchView("security");
   if(action==="theme")setTheme();
   if(action==="export")$("#export-current")?.click();
  }));
