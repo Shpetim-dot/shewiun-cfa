@@ -289,9 +289,9 @@ def init_db() -> None:
             ))
         if db.execute("SELECT COUNT(*) FROM brain").fetchone()[0] == 0:
             samples = [
-                ("CFA principle", "CFA coordinates external models and agents; it is not itself a new foundation model.", "Rule", "Product brief", 95),
-                ("Shared knowledge", "Knowledge entries should keep their source and confidence visible.", "Decision", "Product brief", 90),
-                ("Human oversight", "High-impact actions should require explicit human approval.", "Rule", "Security baseline", 95),
+                ("CFA principle", "CFA coordinates external models and agents; it is not itself a new foundation model. Related notes: [[Shared knowledge]] and [[Human oversight]].", "Rule", "Product brief", 95),
+                ("Shared knowledge", "Knowledge entries should keep their source and confidence visible. Connect validated findings to [[CFA principle]] and [[Human oversight]].", "Decision", "Product brief", 90),
+                ("Human oversight", "High-impact actions should require explicit human approval. This rule supports [[CFA principle]] and [[Shared knowledge]].", "Rule", "Security baseline", 95),
             ]
             for title, content, kind, source, confidence in samples:
                 db.execute("INSERT INTO brain VALUES (?, ?, ?, ?, ?, ?, ?)",
