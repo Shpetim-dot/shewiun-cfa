@@ -241,6 +241,11 @@ def init_db() -> None:
           kind TEXT NOT NULL DEFAULT 'Fact', source TEXT NOT NULL DEFAULT 'User input',
           confidence INTEGER NOT NULL DEFAULT 80, created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS agents (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, role TEXT NOT NULL,
+          instructions TEXT NOT NULL DEFAULT '', icon TEXT NOT NULL DEFAULT 'bot',
+          created_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS council (
           id TEXT PRIMARY KEY, topic TEXT NOT NULL, result TEXT NOT NULL,
           transcript TEXT NOT NULL, mode TEXT NOT NULL, created_at TEXT NOT NULL
@@ -364,8 +369,20 @@ class BrainIn(BaseModel):
 
 class CouncilIn(BaseModel):
     topic: str = Field(min_length=3, max_length=4000)
-    roles: list[str] = Field(default_factory=lambda: ["Strategist", "Skeptic", "Builder"])
+    roles: list[str] = Field(default_factory=list, max_length=12)
     rounds: int = Field(default=1, ge=1, le=2)
+
+
+class AgentCreateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=48)
+    role: str = Field(min_length=3, max_length=120)
+    instructions: str = Field(default="", max_length=1200)
+    icon: str = Field(default="bot", pattern=r"^(bot|compass|shield-check|wrench|book-open|chart-no-axes-combined|search|workflow)$")
+
+
+class AgentRunIn(BaseModel):
+    topic: str = Field(min_length=3, max_length=4000)
+    agent_id: str = Field(default="local-planner", min_length=1, max_length=80)
 
 
 @app.get("/")
@@ -501,18 +518,122 @@ def create_brain(item: BrainIn) -> dict[str, Any]:
 
 
 AGENTS = [
-    {"id": "strategist", "name": "Strategist", "role": "Direction & priorities", "provider": "CFA demo", "status": "Ready", "color": "violet"},
-    {"id": "skeptic", "name": "Skeptic", "role": "Risks & counterarguments", "provider": "CFA demo", "status": "Ready", "color": "amber"},
-    {"id": "builder", "name": "Builder", "role": "Implementation & next steps", "provider": "CFA demo", "status": "Ready", "color": "mint"},
-    {"id": "synthesizer", "name": "Synthesizer", "role": "Decision & summary", "provider": "CFA demo", "status": "Ready", "color": "blue"},
+    {"id": "strategist", "name": "Strategist", "role": "Direction & priorities", "icon": "compass", "color": "violet"},
+    {"id": "skeptic", "name": "Skeptic", "role": "Risks & counterarguments", "icon": "shield-check", "color": "amber"},
+    {"id": "builder", "name": "Builder", "role": "Implementation & next steps", "icon": "wrench", "color": "mint"},
+    {"id": "synthesizer", "name": "Synthesizer", "role": "Decision & summary", "icon": "workflow", "color": "blue"},
+    {"id": "local-planner", "name": "Local Planner", "role": "Free, rules-based planning", "icon": "compass", "color": "blue", "free": True},
 ]
 
 
-@app.get("/api/agents")
-def list_agents() -> list[dict[str, str]]:
+def _agent_records() -> list[dict[str, Any]]:
     live = model_provider_configured()
-    return [{**a, "provider": configured_model_name() if live else "Not configured",
-             "status": "Connected" if live else "Demo mode"} for a in AGENTS]
+    records = []
+    for agent in AGENTS:
+        records.append({**agent, "instructions": "", "provider": "Built-in · free" if agent.get("free") else (configured_model_name() if live else "Model not configured"),
+                        "status": "Available offline" if agent.get("free") else ("Connected" if live else "Ready when a model is configured")})
+    with connect() as db:
+        custom = [dict(row) for row in db.execute("SELECT id, name, role, instructions, icon, created_at FROM agents ORDER BY created_at ASC")]
+    for agent in custom:
+        agent.update({"provider": configured_model_name() if live else "Built-in · free fallback",
+                      "status": "Connected" if live else "Available in free mode", "color": "blue", "custom": True})
+    return records + custom
+
+
+@app.get("/api/agents")
+def list_agents() -> list[dict[str, Any]]:
+    return _agent_records()
+
+
+@app.post("/api/agents")
+def create_agent(item: AgentCreateIn) -> dict[str, Any]:
+    name = item.name.strip()
+    role = item.role.strip()
+    if not name or not role:
+        raise HTTPException(status_code=422, detail="Agent name and role are required.")
+    if name.casefold() in {agent["name"].casefold() for agent in _agent_records()}:
+        raise HTTPException(status_code=409, detail="An agent with this name already exists.")
+    record = {"id": str(uuid4()), "name": name, "role": role, "instructions": item.instructions.strip(),
+              "icon": item.icon, "created_at": now()}
+    with connect() as db:
+        db.execute("INSERT INTO agents (id, name, role, instructions, icon, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                   (record["id"], record["name"], record["role"], record["instructions"], record["icon"], record["created_at"]))
+    log("Agent created", f"{name} · {role}")
+    return {**record, "provider": configured_model_name() if model_provider_configured() else "Built-in · free fallback",
+            "status": "Connected" if model_provider_configured() else "Available in free mode", "color": "blue", "custom": True}
+
+
+@app.delete("/api/agents/{agent_id}")
+def delete_agent(agent_id: str) -> dict[str, str]:
+    if agent_id in {agent["id"] for agent in AGENTS}:
+        raise HTTPException(status_code=400, detail="Built-in agents cannot be deleted.")
+    with connect() as db:
+        cursor = db.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+    log("Agent deleted", agent_id)
+    return {"status": "deleted"}
+
+
+def _free_agent_reply(agent: dict[str, Any], topic: str, brain: list[dict[str, Any]]) -> str:
+    words = {word.lower().strip(".,:;!?()[]{}") for word in topic.split() if len(word) > 3}
+    relevant = []
+    for entry in brain:
+        text = f"{entry.get('title', '')} {entry.get('content', '')}".lower()
+        overlap = sum(1 for word in words if word in text)
+        if overlap:
+            relevant.append((overlap, entry))
+    relevant.sort(key=lambda pair: (-pair[0], pair[1].get("created_at", "")))
+    context = "\n".join(f"- {entry['title']} ({entry['kind']}, confidence {entry['confidence']}%): {entry['content'][:360]}" for _, entry in relevant[:4])
+    if not context:
+        context = "- No directly matching Brain entries. Treat unverified claims as assumptions and record validated findings in Brain."
+    steps = [
+        "Define the desired outcome and one measurable success criterion.",
+        "Break the work into the smallest testable next step; assign an owner and a completion condition.",
+        "Validate the highest-impact assumption with evidence before expanding scope.",
+        "Record the decision, source and confidence in CFA Brain so later tasks can reuse it.",
+    ]
+    role = agent.get("role", "")
+    if any(word in role.lower() for word in ("risk", "security", "skeptic", "compliance")):
+        steps = ["List assets, stakeholders and failure modes.", "Rank risks by impact and likelihood; separate known facts from assumptions.", "Add a human approval or rollback path for consequential actions.", "Define evidence that would change the recommendation."]
+    elif any(word in role.lower() for word in ("build", "implement", "engineer", "developer")):
+        steps = ["Define a thin end-to-end slice and acceptance criteria.", "Identify dependencies and the smallest implementation sequence.", "Add tests for the main path and one failure path.", "Ship to a preview, validate with a real task, then expand."]
+    elif any(word in role.lower() for word in ("research", "analyst", "strategy", "strategist")):
+        steps = ["State the decision and alternatives explicitly.", "List evidence needed to compare the alternatives.", "Identify the assumptions most likely to change the decision.", "Recommend the next low-cost experiment."]
+    instruction = agent.get("instructions", "").strip()
+    instruction_line = f"\nRole guidance: {instruction}" if instruction else ""
+    numbered = "\n".join(f"{i+1}. {step}" for i, step in enumerate(steps))
+    return (f"Task\n{topic}\n\nRelevant CFA Brain context\n{context}\n\nProposed next steps\n{numbered}"
+            f"\n\nRisks and assumptions\n- This is a deterministic, rules-based result, not an LLM-generated answer.\n"
+            "- The prompt may omit constraints, budget, ownership or deadline; confirm these before acting.\n"
+            "- Do not treat suggested steps as verified facts.\n\nNext question\nWhat observable result would make this task successful?"
+            f"{instruction_line}")
+
+
+@app.post("/api/agents/run")
+async def run_agent(item: AgentRunIn) -> dict[str, Any]:
+    agent = next((a for a in _agent_records() if a["id"] == item.agent_id), None)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+    with connect() as db:
+        brain = [dict(row) for row in db.execute("SELECT * FROM brain ORDER BY created_at DESC LIMIT 100")]
+    context = "\n".join(f"{entry['title']}: {entry['content'][:300]}" for entry in brain[:12])
+    live = model_provider_configured() and item.agent_id != "local-planner"
+    try:
+        reply = await model_reply(agent["name"], item.topic, context) if live else _free_agent_reply(agent, item.topic, brain)
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Agent run failed; no result was stored.") from exc
+    if not reply or not reply.strip():
+        raise HTTPException(status_code=502, detail="Agent returned no content.")
+    transcript = [{"role": agent["name"], "content": reply}]
+    record = {"id": str(uuid4()), "topic": item.topic, "result": reply, "transcript": json.dumps(transcript, ensure_ascii=False),
+              "mode": "live" if live else "local-free", "created_at": now()}
+    with connect() as db:
+        db.execute("INSERT INTO council VALUES (?, ?, ?, ?, ?, ?)",
+                   (record["id"], record["topic"], record["result"], record["transcript"], record["mode"], record["created_at"]))
+    log("Agent task completed", f"{agent['name']}: {item.topic[:140]}")
+    return {**record, "transcript": transcript, "agent": agent, "context_entries": [entry["title"] for entry in brain[:4]],
+            "mode_label": "Model-backed" if live else "Free · local rules"}
 
 
 async def model_reply(role: str, topic: str, context: str) -> str | None:
@@ -567,7 +688,9 @@ def demo_reply(role: str, topic: str, context: str) -> str:
 
 @app.post("/api/council")
 async def start_council(item: CouncilIn) -> dict[str, Any]:
-    roles = [r for r in item.roles if r in {"Strategist", "Skeptic", "Builder"}]
+    available = _agent_records()
+    allowed = {agent["name"] for agent in available if agent["name"] != "Synthesizer"}
+    roles = [role for role in item.roles if role in allowed][:8]
     if not roles:
         roles = ["Strategist", "Skeptic", "Builder"]
     if "Synthesizer" not in roles:
@@ -575,21 +698,23 @@ async def start_council(item: CouncilIn) -> dict[str, Any]:
     transcript: list[dict[str, str]] = []
     context = ""
     live = model_provider_configured()
-    if not live:
-        raise HTTPException(status_code=503, detail="No model configured. Add GEMINI_API_KEY for the Gemini Flash integration, or set CFA_MODEL_API_KEY and CFA_MODEL_NAME.")
+    with connect() as db:
+        brain_context = [dict(row) for row in db.execute("SELECT * FROM brain ORDER BY created_at DESC LIMIT 100")]
     try:
         for _ in range(item.rounds):
             for role in roles:
-                reply = await model_reply(role, item.topic, context)
+                agent = next((a for a in available if a["name"] == role), {"name": role, "role": role, "instructions": ""})
+                use_model = live and not agent.get("free")
+                reply = await model_reply(role, item.topic, context) if use_model else _free_agent_reply(agent, item.topic, brain_context)
                 if not reply:
-                    raise ValueError(f"The configured model returned no content for role {role}.")
+                    raise ValueError(f"The configured agent returned no content for role {role}.")
                 transcript.append({"role": role, "content": reply})
                 context += f"\n{role}: {reply}"
     except (httpx.HTTPError, KeyError, ValueError) as exc:
         raise HTTPException(status_code=502, detail=f"Configured model request failed: {exc}") from exc
     result = next((m["content"] for m in reversed(transcript) if m["role"] == "Synthesizer"), transcript[-1]["content"])
     record = {"id": str(uuid4()), "topic": item.topic, "result": result,
-              "transcript": json.dumps(transcript, ensure_ascii=False), "mode": "live" if live else "demo",
+              "transcript": json.dumps(transcript, ensure_ascii=False), "mode": "live" if live else "local-free",
               "created_at": now()}
     with connect() as db:
         db.execute("INSERT INTO council VALUES (:id, :topic, :result, :transcript, :mode, :created_at)", record)
