@@ -415,7 +415,7 @@ def health() -> dict[str, Any]:
         "free_agent_name": "Gemini Flash (API key required; free-tier availability depends on Google account and current limits)",
         "database": database_backend(),
         "storage_persistent": database_backend() == "postgresql" or not IS_VERCEL,
-        "database_backend": "sqlite",
+        "database_backend": database_backend(),
         "distributed_rate_limits": database_backend() == "postgresql",
         "durable_queue": False,
         "email_unlock_configured": email_capture_enabled(),
@@ -907,7 +907,7 @@ def agent_launch_review_result_page(share_token: str) -> FileResponse:
 
 @app.get("/api/review/agent-launch/result/{share_token}")
 def get_agent_launch_result(share_token: str) -> dict[str, Any]:
-    result = get_review_by_token(None if database_url() else DB_PATH, share_token)
+    result = get_review_by_token(None if database_url() else DB_PATH, share_token, require_lead=lead_gate_enabled())
     if result is None:
         raise HTTPException(status_code=404, detail="Review not found or link revoked.")
     return result
