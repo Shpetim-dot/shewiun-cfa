@@ -45,7 +45,7 @@
         <div class="workspace-intro">
           <div class="eyebrow">DECISION WORKSPACE</div>
           <h1>What needs a decision?</h1>
-          <p>Turn an open question into clear options, risks and next steps.</p>
+          <p>Choose an agent, add context from your Brain, and turn an open question into a practical next step.</p>
         </div>
         <section class="workspace-composer panel">
           <div class="composer-heading"><span class="agent-mascot is-idle" id="workspace-mascot" aria-label="Shewiun local agent"><i class="mascot-eye"><b></b></i><i class="mascot-eye"><b></b></i><span class="mascot-mouth"></span></span><div><h2>What should your agent work on?</h2><p class="composer-subtitle">Pick an agent, describe the outcome, and keep the result in your Brain.</p></div></div>
@@ -67,15 +67,15 @@
         <section class="panel history-panel"><div class="panel-heading"><div><h3>Previous meetings</h3><p>Your recent council decisions</p></div></div><div id="council-history"></div></section>
       </section>
       <section class="view" id="view-brain">
-        <div class="page-title split-title"><div><div class="eyebrow">SHARED, SOURCE-AWARE CONTEXT</div><h1>CFA <span>Brain</span></h1><p>Knowledge that stays visible, attributable and useful across agents.</p></div><button class="btn primary" id="add-knowledge">＋ Add knowledge</button></div>
-        <div class="brain-banner"><span class="banner-icon">◈</span><div><b>One shared source of truth</b><p>Keep facts, decisions and rules together with the source and confidence level attached.</p></div><span class="banner-count" id="brain-count">0 ENTRIES</span></div>
+        <div class="page-title split-title"><div><div class="eyebrow">SHARED, SOURCE-AWARE CONTEXT</div><h1>CFA <span>Brain</span></h1><p>A linked knowledge base for agents: sources, decisions, confidence and explicit note connections.</p></div><button class="btn primary" id="add-knowledge">＋ Add knowledge</button></div>
+        <div class="brain-banner"><span class="banner-icon">◈</span><div><b>One shared source of truth</b><p>Agents retrieve relevant saved notes on future tasks. Use explicit note links and verify outcomes before adding them to memory.</p></div><span class="banner-count" id="brain-count">0 ENTRIES</span></div>
         <div class="brain-toolbar"><div class="brain-tabs" role="tablist" aria-label="Brain view"><button type="button" class="brain-tab active" data-brain-view="graph" role="tab" aria-selected="true">Graph</button><button type="button" class="brain-tab" data-brain-view="entries" role="tab" aria-selected="false">Entries</button></div><div class="filter-row"><div class="searchbox"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input id="brain-search" placeholder="Search knowledge..."></div><select id="brain-filter"><option value="All">All types</option><option>Fact</option><option>Decision</option><option>Rule</option><option>Hypothesis</option></select></div></div>
         <section class="brain-graph-panel" id="brain-graph-panel"><div class="brain-graph-heading"><div><b>Knowledge graph</b><p>Use <code>[[Entry title]]</code> in an entry to connect related notes.</p></div><span id="brain-graph-count">0 nodes</span></div><div id="brain-graph" class="brain-graph" role="img" aria-label="Interactive knowledge graph"></div></section>
         <div id="brain-list" class="brain-grid" hidden></div>
       </section>
       <section class="view" id="view-control">
         <div class="page-title"><div class="eyebrow">CENTRAL ORCHESTRATION</div><h1>CFA <span>Control</span></h1><p>Understand which agents are available and what role each one plays.</p></div>
-        <div class="control-banner"><div><span class="eyebrow">AGENT REGISTRY</span><h2>One team. Different strengths.</h2><p>Provider-agnostic orchestration is the goal. This MVP shows the control surface; live execution is optional.</p></div><div class="control-count"><strong id="control-count">04</strong><small>AGENT ROLES</small></div></div>
+        <div class="control-banner"><div><span class="eyebrow">AGENT REGISTRY</span><h2>One team. Different strengths.</h2><p>Create named agents with different roles and working rules. The Local Planner works without an API key; connect a model for generative responses.</p></div><div class="control-count"><strong id="control-count">04</strong><small>AGENT ROLES</small></div></div>
         <div id="agent-grid" class="agent-grid"></div>
         <section class="panel"><div class="panel-heading"><div><h3>Projects</h3><p>Current workspaces</p></div><button class="text-button" id="control-add-project">＋ New project</button></div><div id="control-project-list" class="project-list"></div></section>
       </section>
