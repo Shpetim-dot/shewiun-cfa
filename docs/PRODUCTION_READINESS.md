@@ -20,7 +20,7 @@ The application intentionally reports `production_ready: false`. Do not use the 
    - To enable model-backed Council/review calls, set `GEMINI_API_KEY` as a server-side encrypted environment variable. The model is not enabled by source code alone.
    - Never commit or place any of these values in browser code, tickets, or source control.
 4. **Abuse protection**
-   - Current request limits are process-local and can reset or diverge across serverless instances. Replace with distributed limits at the edge or backed by shared storage; add per-account quotas, model spend budgets, and alerting.
+   - When PostgreSQL is configured, request limits use an atomic shared-table upsert; SQLite fallback limits are process-local and can reset or diverge across serverless instances. Add per-account quotas, model spend budgets, and alerting.
 5. **Operational assurance**
    - Add error reporting, traces, structured redacted logs, uptime/latency alerts, backup restore tests, dependency and secret scanning, and a documented incident/rollback procedure.
    - Run the end-to-end and model-evaluation suites against a preview deployment before promotion.
