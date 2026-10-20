@@ -202,7 +202,7 @@ def _enforce_rules(memo: dict[str, Any], findings: list[dict[str, Any]]) -> dict
     return memo
 
 
-async def create_review(db_path: Path, answers: dict[str, Any], request_id: str | None = None, *, allow_share: bool = True) -> dict[str, Any]:
+async def create_review(db_path: Path | None, answers: dict[str, Any], request_id: str | None = None, *, allow_share: bool = True) -> dict[str, Any]:
     init_review_tables(db_path)
     if not model_configured():
         perspectives = {}
