@@ -280,3 +280,65 @@ body{background:#fff;color:#202123;font-size:14px;font-family:Arial,Helvetica,sa
 @media(min-width:1500px){.content{padding-top:38px}.workspace-intro h1{font-size:30px}}
 @media(max-width:1120px){.content{padding:24px}}
 @media(max-width:760px){.content{padding:20px 14px}.topbar{padding:0 14px}.workspace-intro{padding-top:2px}.stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+
+/* Enterprise workspace refinement */
+.sidebar-new-task{width:100%;display:flex;align-items:center;gap:9px;padding:10px 11px;margin:0 0 22px;border:1px solid #dedee2;border-radius:9px;background:#fff;color:#242428;font-size:13px;font-weight:600;text-align:left}
+.sidebar-new-task>span{display:grid;place-items:center;width:21px;height:21px;border-radius:6px;background:#e8f1ff;color:#1768d2;font-size:17px;line-height:1}
+.sidebar-new-task kbd{margin-left:auto;border:1px solid #e7e7e9;border-radius:4px;padding:2px 5px;color:#8a8a90;font-size:10px;font-family:inherit;font-weight:400}
+.sidebar-new-task:hover{background:#f9f9fa;border-color:#c9c9ce}
+.workspace-intro{padding:8px 0 25px}
+.workspace-intro h1{font-size:30px;letter-spacing:-1px;font-weight:650}
+.workspace-intro p{max-width:620px}
+.workspace-composer{max-width:900px;padding:20px;border-color:#d8d8dc;border-radius:15px;box-shadow:0 4px 18px #10182808}
+.composer-heading{display:flex;align-items:center;gap:14px;margin-bottom:15px}
+.composer-heading h2{font-size:16px;font-weight:650}
+.composer-heading p{max-width:620px;font-size:12px;line-height:1.55}
+.agent-mascot{position:relative;flex:0 0 48px;width:48px;height:43px;border-radius:17px 17px 15px 15px;background:#2878e5;box-shadow:inset 0 -4px 0 #145ac0,0 3px 8px #2878e51f;display:flex;align-items:center;justify-content:center;gap:7px;transition:transform .22s ease, border-radius .22s ease}
+.agent-mascot:before,.agent-mascot:after{content:"";position:absolute;bottom:-3px;width:10px;height:6px;border-radius:0 0 5px 5px;background:#1764cb}
+.agent-mascot:before{left:8px}.agent-mascot:after{right:8px}
+.mascot-eye{position:relative;width:9px;height:12px;border-radius:6px;background:#fff;display:block;overflow:hidden;transition:height .15s ease}
+.mascot-eye i{position:absolute;width:4px;height:5px;left:3px;top:4px;border-radius:50%;background:#173e78;transition:transform .15s ease}
+.agent-mascot.is-looking .mascot-eye i{transform:translateX(1px) translateY(-1px)}
+.agent-mascot.is-working{animation:mascot-bob 1s ease-in-out infinite}
+.agent-mascot.is-working .mascot-eye{height:8px;transform:translateY(1px)}
+.agent-mascot.is-working .mascot-eye i{top:2px}
+.mascot-mouth{position:absolute;left:50%;bottom:8px;width:7px;height:3px;border-radius:0 0 5px 5px;background:#d6e7ff;transform:translateX(-50%)}
+.agent-mascot.is-working .mascot-mouth{width:4px;height:4px;border-radius:50%;bottom:7px}
+@keyframes mascot-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+#workspace-prompt{min-height:108px;padding:13px 2px;font-size:14px;line-height:1.65}
+.composer-footer{align-items:center}
+.composer-footer>span{display:flex;align-items:center;gap:6px;font-size:11px}
+.composer-footer>span b{font-weight:600;color:#44444a}
+.composer-divider{color:#c7c7cb}
+.composer-status{width:7px;height:7px;border-radius:50%;display:inline-block;background:#2d83e9}
+.btn.primary{background:#202124;color:#fff;font-weight:600}
+.btn.primary:hover{background:#343438}
+.btn.primary:disabled{opacity:.7;cursor:wait}
+.button-spinner{width:12px;height:12px;border:2px solid #ffffff55;border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.workspace-response{margin-top:19px;padding-top:17px;border-top:1px solid #ededee}
+.workspace-response-head{display:flex;align-items:center;gap:9px;padding-bottom:12px}
+.workspace-response-head>b{font-size:13px;font-weight:650}
+.workspace-response-head>small{margin-left:auto;font-size:9px;letter-spacing:.7px;color:#77777d}
+.response-agent-dot{position:relative;width:25px;height:23px;flex:0 0 25px;border-radius:9px;background:#2878e5;display:flex;align-items:center;justify-content:center;gap:3px}
+.response-agent-dot i{width:4px;height:6px;background:#fff;border-radius:4px;display:block}
+.response-agent-dot.is-animated{animation:mascot-bob 1s ease-in-out infinite}
+.workspace-user-prompt{font-size:12px;color:#6b6b70;background:#f7f7f8;border-radius:8px;padding:10px 12px;margin:0 0 12px;white-space:pre-wrap;line-height:1.6}
+.runtime-progress{padding:11px 0 15px}
+.runtime-progress-top{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:#57575d;margin-bottom:8px}
+.runtime-progress-top b{font-size:10px;color:#77777d;font-weight:500}
+.runtime-progress-track{height:4px;border-radius:10px;background:#eeeeef;overflow:hidden}
+.runtime-progress-track span{height:100%;display:block;background:#2878e5;border-radius:10px;transition:width .25s ease}
+.workspace-answer{border:1px solid #e8e8eb;border-radius:9px;padding:13px 14px;margin-top:9px}
+.workspace-answer>b{font-size:11px;color:#3c3c42}
+.workspace-answer p{font-size:12px;line-height:1.7;color:#4d4d53;white-space:pre-wrap;margin:7px 0 0}
+.workspace-answer.response-synthesis{border-left:3px solid #2878e5;background:#fbfcff}
+.workspace-answer.response-synthesis>b{color:#1d5eae}
+.response-error{color:#a43e3e;font-size:12px;line-height:1.6}
+.section-heading h2{font-size:17px;font-weight:650}
+.stat-card strong{font-weight:650}
+.stat-grid{max-width:1000px}
+.two-col{max-width:1000px}
+@media(max-width:760px){.sidebar-new-task{justify-content:center;padding:10px 0}.sidebar-new-task kbd,.sidebar-new-task:not(:focus-visible){font-size:0}.sidebar-new-task>span{font-size:17px}.workspace-intro h1{font-size:26px}.workspace-composer{padding:15px}.composer-heading{align-items:flex-start}.agent-mascot{flex-basis:42px;width:42px;height:39px}.composer-footer{align-items:flex-start}.composer-footer>span{flex-wrap:wrap;max-width:65%}}
+@media(prefers-reduced-motion:reduce){.agent-mascot.is-working,.response-agent-dot.is-animated,.button-spinner{animation:none}.runtime-progress-track span{transition:none}}
