@@ -110,7 +110,7 @@ async def _call_model(role: str, answers: dict[str, Any], findings: list[dict[st
             model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
             response = await client.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                params={"key": os.getenv("GEMINI_API_KEY")},
+                headers={"x-goog-api-key": os.getenv("GEMINI_API_KEY")},
                 json={"systemInstruction": {"parts": [{"text": _schema_prompt(role)}]},
                       "contents": [{"role": "user", "parts": [{"text": user_text}]}],
                       "generationConfig": {"temperature": 0.2, "maxOutputTokens": 3000,
