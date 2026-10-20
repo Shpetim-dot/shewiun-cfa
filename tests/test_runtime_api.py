@@ -9,9 +9,9 @@ def test_runtime_council_run_is_durable_and_completes(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "DB_PATH", tmp_path / "runtime-test.db")
     monkeypatch.setenv("CFA_MODEL_API_KEY", "test-key")
     monkeypatch.setenv("CFA_MODEL_NAME", "test-model")
-\n    async def fake_model_reply(role, topic, context):
+    async def fake_model_reply(role, topic, context):
         return f"{role} reviewed: {topic}"
-\n    monkeypatch.setattr(main, "model_reply", fake_model_reply)
+    monkeypatch.setattr(main, "model_reply", fake_model_reply)
 
     with TestClient(main.app) as client:
         created = client.post("/api/runtime/runs", json={
