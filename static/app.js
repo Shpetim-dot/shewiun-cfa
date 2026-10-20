@@ -15,7 +15,49 @@ function activityMarkup(a){return `<div class="activity-row"><div class="activit
 function brainMarkup(b){return `<article class="brain-card"><div class="brain-card-head"><span class="kind-tag ${esc(b.kind.toLowerCase())}">${esc(b.kind)}</span><span class="confidence"><span class="confidence-track"><span style="width:${b.confidence}%"></span></span><b>${b.confidence}%</b></span></div><h3>${esc(b.title)}</h3><p>${esc(b.content)}</p><div class="brain-meta"><span>↳ ${esc(b.source)}</span><time>${date(b.created_at)}</time></div></article>`}
 function agentMarkup(a){return `<article class="agent-card"><div class="agent-symbol ${esc(a.color)}">${icon(a.icon||"bot")}</div>${a.custom?`<button type="button" class="agent-delete" data-delete-agent="${esc(a.id)}" aria-label="Delete ${esc(a.name)}" title="Delete agent">${icon("trash",15)}</button>`:""}<h3>${esc(a.name)}</h3><p>${esc(a.role)}</p><div class="agent-provider">Provider · ${esc(a.provider)}</div><div class="agent-status"><span></span>${esc(a.status)}</div></article>`}
 function messageMarkup(m){const synthesis=m.role==="Synthesizer";const roleIcon=m.role==="Skeptic"?"shield":m.role==="Builder"?"wrench":m.role==="Strategist"?"compass":"workflow";return `<article class="message-card ${synthesis?"synthesis":""}"><div class="message-top"><span class="message-avatar">${icon(roleIcon,15)}</span><b>${esc(m.role)}${synthesis?" · Final synthesis":""}</b><small>${synthesis?"CONCLUSION":"PERSPECTIVE"}</small></div><p>${esc(m.content)}</p></article>`}
-async function refresh(){try{const [projects,brain,agents,councils,activity,health]=await Promise.all([api("/api/projects"),api("/api/brain"),api("/api/agents"),api("/api/council"),api("/api/activity"),api("/api/health")]);Object.assign(state,{projects,brain,agents,councils,activity});$("#api-status").textContent="API connected · v"+health.version;$("#mode-label").textContent=health.model_configured?(health.model_name||"Model configured"):"Free-tier model supported";document.documentElement.dataset.modelConfigured=health.model_configured?"true":"false";$("#health-title").textContent=health.model_configured?(health.model_provider||"Model configured"):"Gemini setup needed";$("#system-status").dataset.state=health.model_configured?"ready":"missing";$("#composer-status").textContent=health.model_configured?((health.model_provider||"Model")+" · "+(health.model_name||"configured")+(health.storage_persistent?"":" · storage is temporary")):"Free Local Planner ready · add GEMINI_API_KEY for model-backed agents";$("#model-setup").hidden=!!health.model_configured;const readinessTitle=$("#security-readiness-title"),readinessCopy=$("#security-readiness-copy");if(readinessTitle)readinessTitle.textContent=health.production_ready?"Production checks passed":"Production readiness: blockers remain";if(readinessCopy)readinessCopy.textContent=(health.readiness_blockers||[]).length?(health.readiness_blockers.join(" · ")):"No reported blockers. This status is not a security certification.";render();await refreshApprovals();await refreshReviewAdmin();}catch(e){$("#api-status").textContent="API unavailable";$("#health-title").textContent="Runtime unavailable";$("#mode-label").textContent="Health check failed";$("#system-status").dataset.state="missing";$("#composer-status").textContent="Runtime unavailable · retry later";toast(e.message)}}
+async function refresh(){
+ const alertEl=$("#runtime-alert");
+ try{
+  const health=await api("/api/health",{cache:"no-store"});
+  if(health.auth_required&&!health.auth_configured){
+   const message="Workspace API is locked: set CFA_ACCESS_PASSWORD (16+ characters) and CFA_SESSION_SECRET (32+ random characters) in Vercel, then redeploy.";
+   $("#api-status").textContent="API locked · auth setup required";
+   $("#health-title").textContent="Workspace access locked";
+   $("#mode-label").textContent="Configure Vercel access secrets";
+   $("#system-status").dataset.state="missing";
+   $("#composer-status").textContent="API locked until workspace authentication is configured.";
+   if(alertEl){alertEl.hidden=false;alertEl.innerHTML="<b>Workspace API is locked</b><p>"+esc(message)+"</p>";}
+   return;
+  }
+  const [projects,brain,agents,councils,activity]=await Promise.all([
+   api("/api/projects",{cache:"no-store"}),api("/api/brain",{cache:"no-store"}),
+   api("/api/agents",{cache:"no-store"}),api("/api/council",{cache:"no-store"}),
+   api("/api/activity",{cache:"no-store"})
+  ]);
+  Object.assign(state,{projects,brain,agents,councils,activity});
+  $("#api-status").textContent="API connected · v"+health.version;
+  $("#mode-label").textContent=health.model_configured?(health.model_name||"Model configured"):(health.free_agent_available?"Local free agent available":"Model setup required");
+  document.documentElement.dataset.modelConfigured=health.model_configured?"true":"false";
+  $("#health-title").textContent=health.model_configured?(health.model_provider||"Model configured"):(health.free_agent_available?"Local agent ready":"Model setup needed");
+  $("#system-status").dataset.state=health.model_configured?"ready":"local";
+  $("#composer-status").textContent=health.model_configured?((health.model_provider||"Model")+" · "+(health.model_name||"configured")+(health.storage_persistent?"":" · storage is temporary")):"Free Local Planner ready · add GEMINI_API_KEY for model-backed agents";
+  $("#model-setup").hidden=!!health.model_configured;
+  const readinessTitle=$("#security-readiness-title"),readinessCopy=$("#security-readiness-copy");
+  if(readinessTitle)readinessTitle.textContent=health.production_ready?"Production checks passed":"Production readiness: blockers remain";
+  if(readinessCopy)readinessCopy.textContent=(health.readiness_blockers||[]).length?(health.readiness_blockers.join(" · ")):"No reported blockers. This status is not a security certification.";
+  if(alertEl)alertEl.hidden=true;
+  render();await refreshApprovals();await refreshReviewAdmin();
+ }catch(e){
+  const message=e.message||"The API request failed.";
+  $("#api-status").textContent="API unavailable";
+  $("#health-title").textContent="Runtime/API error";
+  $("#mode-label").textContent="Check deployment configuration";
+  $("#system-status").dataset.state="missing";
+  $("#composer-status").textContent="API request failed · see diagnostic message above";
+  if(alertEl){alertEl.hidden=false;alertEl.innerHTML="<b>Workspace API is not responding</b><p>"+esc(message)+"</p><button type=\"button\" class=\"btn secondary\" id=\"retry-runtime\">Retry connection</button>";$("#retry-runtime")?.addEventListener("click",()=>refresh());}
+  console.error("Shewiun runtime check failed",e);
+ }
+}
 function renderAgentDock(){
  const host=$("#agent-dock-list");if(!host)return;
  if(!state.agents.length){host.textContent="No agents available.";return;}
