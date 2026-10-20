@@ -10,6 +10,8 @@ from typing import Any
 import psycopg
 from psycopg.rows import class_row
 
+DATABASE_ERRORS = (sqlite3.Error, psycopg.Error)
+
 
 def database_url() -> str | None:
     return os.getenv("CFA_DATABASE_URL") or os.getenv("DATABASE_URL")
