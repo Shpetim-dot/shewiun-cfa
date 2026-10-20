@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from uuid import uuid4
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -41,6 +42,41 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Shewiun CFA", version="0.2.0", description="Control & Focus Architecture")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+_RATE_BUCKETS: dict[str, list[float]] = {}
+_RATE_LIMIT_PATHS = {"/api/runtime/runs", "/api/council", "/api/review/agent-launch/assess"}
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    if request.url.path in _RATE_LIMIT_PATHS:
+        client_ip = request.client.host if request.client else "unknown"
+        bucket_key = request.url.path + ":" + client_ip
+        now_mono = time.monotonic()
+        hits = [stamp for stamp in _RATE_BUCKETS.get(bucket_key, []) if now_mono - stamp < 60]
+        if len(hits) >= 30:
+            return JSONResponse(status_code=429, content={"detail": "Rate limit reached. Wait one minute and retry."},
+                                headers={"Retry-After": "60"})
+        hits.append(now_mono)
+        _RATE_BUCKETS[bucket_key] = hits
+        if len(_RATE_BUCKETS) > 2000:
+            for key in list(_RATE_BUCKETS)[:500]:
+                if not _RATE_BUCKETS[key] or now_mono - _RATE_BUCKETS[key][-1] >= 60:
+                    _RATE_BUCKETS.pop(key, None)
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > 1_000_000:
+                return JSONResponse(status_code=413, content={"detail": "Request body too large."})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
+    return response
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -281,7 +317,7 @@ AGENTS = [
 @app.get("/api/agents")
 def list_agents() -> list[dict[str, str]]:
     live = model_provider_configured()
-    return [{**a, "provider": os.getenv("CFA_MODEL_NAME", "Configured model") if live else "Local demo",
+    return [{**a, "provider": configured_model_name() if live else "Not configured",
              "status": "Connected" if live else "Demo mode"} for a in AGENTS]
 
 
@@ -541,7 +577,7 @@ async def _execute_runtime_run(run_id: str) -> None:
     item = _runtime_run(row)
     request, state = item["input"], item["state"]
     roles, transcript = state["roles"], state["transcript"]
-    live = bool(os.getenv("CFA_MODEL_API_KEY"))
+    live = model_provider_configured()
     try:
         while state["next_index"] < len(roles):
             with connect() as db:
