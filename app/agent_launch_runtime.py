@@ -9,7 +9,7 @@ import asyncio
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -259,10 +259,56 @@ async def create_review(db_path: Path | None, answers: dict[str, Any], request_i
     return result
 
 
-def get_review_by_token(db_path: Path | None, token: str) -> dict[str, Any] | None:
+def _preview_result(result: dict[str, Any]) -> dict[str, Any]:
+    deterministic = result.get("deterministic", {})
+    return {
+        "id": result.get("id"),
+        "playbook": result.get("playbook"),
+        "playbook_version": result.get("playbook_version"),
+        "created_at": result.get("created_at"),
+        "assessment_type": "deterministic_self_assessment",
+        "model_configured": result.get("model_configured", False),
+        "model_provider": result.get("model_provider"),
+        "disclaimer": result.get("disclaimer"),
+        "deterministic": deterministic,
+        "preliminary_status": deterministic.get("preliminary_status", "Review required"),
+        "findings": deterministic.get("findings", []),
+        "finding_count": deterministic.get("finding_count", 0),
+        "note": "Preview only. The full decision memo is locked until the email and consent step is completed.",
+        "share_url": result.get("share_url"),
+        "storage_durable": result.get("storage_durable", False),
+        "storage_warning": result.get("storage_warning"),
+        "lead_required": True,
+        "preview_only": True,
+    }
+
+
+def has_review_lead(db_path: Path | None, submission_id: str, email: str | None = None) -> bool:
     with _connect(db_path) as db:
-        row = db.execute("SELECT result_json FROM review_results WHERE share_token=?", (token,)).fetchone()
-    return json.loads(row["result_json"]) if row else None
+        if email:
+            row = db.execute(
+                "SELECT 1 FROM review_leads WHERE submission_id=? AND email=? AND consent=1 LIMIT 1",
+                (submission_id, email.strip().lower()),
+            ).fetchone()
+        else:
+            row = db.execute(
+                "SELECT 1 FROM review_leads WHERE submission_id=? AND consent=1 LIMIT 1",
+                (submission_id,),
+            ).fetchone()
+    return row is not None
+
+
+def get_review_by_token(db_path: Path | None, token: str, *, require_lead: bool = False) -> dict[str, Any] | None:
+    with _connect(db_path) as db:
+        row = db.execute(
+            "SELECT submission_id, result_json FROM review_results WHERE share_token=?", (token,)
+        ).fetchone()
+    if not row:
+        return None
+    result = json.loads(row["result_json"])
+    if require_lead and not has_review_lead(db_path, row["submission_id"]):
+        return _preview_result(result)
+    return result
 
 
 def get_review_by_id(db_path: Path, review_id: str) -> dict[str, Any] | None:
@@ -281,16 +327,22 @@ def record_analytics(db_path: Path, event_name: str, submission_id: str | None =
                    (str(uuid4()), submission_id, event_name, json.dumps(metadata or {}), _now()))
 
 
-def capture_lead(db_path: Path, submission_id: str, email: str, consent: bool) -> None:
+def capture_lead(db_path: Path | None, submission_id: str, email: str, consent: bool) -> None:
     if not consent:
         raise ValueError("Explicit consent is required to store this email for the full memo.")
+    normalized_email = email.strip().lower()
     with _connect(db_path) as db:
         if not db.execute("SELECT 1 FROM review_submissions WHERE id=?", (submission_id,)).fetchone():
             raise KeyError("Review not found")
-        db.execute("INSERT INTO review_leads VALUES (?, ?, ?, 1, ?)",
-                   (str(uuid4()), submission_id, email.strip().lower(), _now()))
-        db.execute("INSERT INTO review_analytics VALUES (?, ?, 'email_captured', '{}', ?)",
-                   (str(uuid4()), submission_id, _now()))
+        existing = db.execute(
+            "SELECT 1 FROM review_leads WHERE submission_id=? AND email=? AND consent=1 LIMIT 1",
+            (submission_id, normalized_email),
+        ).fetchone()
+        if not existing:
+            db.execute("INSERT INTO review_leads VALUES (?, ?, ?, 1, ?)",
+                       (str(uuid4()), submission_id, normalized_email, _now()))
+            db.execute("INSERT INTO review_analytics VALUES (?, ?, 'email_captured', '{}', ?)",
+                       (str(uuid4()), submission_id, _now()))
 
 
 def create_test_request(db_path: Path, submission_id: str, payload: dict[str, Any]) -> str:
@@ -301,6 +353,48 @@ def create_test_request(db_path: Path, submission_id: str, payload: dict[str, An
         db.execute("INSERT INTO review_analytics VALUES (?, ?, 'test_requested', '{}', ?)",
                    (str(uuid4()), submission_id, _now()))
     return request_id
+
+
+def list_test_requests(db_path: Path | None, limit: int = 100) -> list[dict[str, Any]]:
+    with _connect(db_path) as db:
+        rows = db.execute(
+            "SELECT id, submission_id, request_json, created_at FROM review_test_requests ORDER BY created_at DESC LIMIT ?",
+            (max(1, min(limit, 200)),),
+        ).fetchall()
+    return [{"id": row["id"], "submission_id": row["submission_id"],
+             "request": json.loads(row["request_json"]), "created_at": row["created_at"]} for row in rows]
+
+
+def review_analytics_summary(db_path: Path | None, days: int = 30) -> dict[str, Any]:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 365)))).isoformat()
+    with _connect(db_path) as db:
+        rows = db.execute(
+            "SELECT event_name, COUNT(*) AS total FROM review_analytics WHERE created_at >= ? GROUP BY event_name",
+            (cutoff,),
+        ).fetchall()
+        leads = db.execute("SELECT COUNT(*) FROM review_leads WHERE created_at >= ?", (cutoff,)).fetchone()[0]
+        requests = db.execute("SELECT COUNT(*) FROM review_test_requests WHERE created_at >= ?", (cutoff,)).fetchone()[0]
+        submissions = db.execute("SELECT COUNT(*) FROM review_submissions WHERE created_at >= ?", (cutoff,)).fetchone()[0]
+    return {"window_days": max(1, min(days, 365)), "submissions": submissions, "leads": leads,
+            "authorization_test_requests": requests,
+            "events": {row["event_name"]: row["total"] for row in rows}}
+
+
+def purge_expired_review_data(db_path: Path | None, retention_days: int = 90) -> dict[str, int]:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, retention_days))).isoformat()
+    deleted = {"submissions": 0, "results": 0, "leads": 0, "test_requests": 0, "analytics": 0}
+    with _connect(db_path) as db:
+        old = db.execute("SELECT id FROM review_submissions WHERE created_at < ?", (cutoff,)).fetchall()
+        for row in old:
+            submission_id = row["id"]
+            deleted["leads"] += db.execute("DELETE FROM review_leads WHERE submission_id=?", (submission_id,)).rowcount
+            deleted["results"] += db.execute("DELETE FROM review_results WHERE submission_id=?", (submission_id,)).rowcount
+            deleted["test_requests"] += db.execute("DELETE FROM review_test_requests WHERE submission_id=?", (submission_id,)).rowcount
+            deleted["analytics"] += db.execute("DELETE FROM review_analytics WHERE submission_id=?", (submission_id,)).rowcount
+            deleted["submissions"] += db.execute("DELETE FROM review_submissions WHERE id=?", (submission_id,)).rowcount
+        deleted["analytics"] += db.execute("DELETE FROM review_analytics WHERE created_at < ?", (cutoff,)).rowcount
+        db.execute("DELETE FROM review_rate_limits WHERE window_started_at < ?", (cutoff,))
+    return deleted
 
 
 def delete_review(db_path: Path | None, review_id: str) -> bool:
