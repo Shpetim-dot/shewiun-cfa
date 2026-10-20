@@ -910,6 +910,8 @@ def get_agent_launch_result(share_token: str) -> dict[str, Any]:
     result = get_review_by_token(None if database_url() else DB_PATH, share_token, require_lead=lead_gate_enabled())
     if result is None:
         raise HTTPException(status_code=404, detail="Review not found or link revoked.")
+    if result.get("lead_required"):
+        result["privacy_notice_url"] = privacy_notice_url()
     return result
 
 
@@ -929,4 +931,8 @@ async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
     result["finding_count"] = result["deterministic"]["finding_count"]
     result["note"] = ("Model-backed perspectives and synthesis completed." if result["model_configured"]
                       else "No model was called. This is a deterministic self-assessment preview only.")
-    return _preview_result(result) if lead_gate_enabled() else result
+    if lead_gate_enabled():
+        preview = _preview_result(result)
+        preview["privacy_notice_url"] = privacy_notice_url()
+        return preview
+    return result
