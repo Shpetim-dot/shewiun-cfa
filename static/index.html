@@ -10,9 +10,9 @@
 <div class="app-shell">
   <aside class="sidebar">
     <a class="brand" href="#"><span class="brand-mark">S</span><span><b>SHEWIUN</b><small>WORKSPACE</small></span></a>
-    <div class="workspace-label">WORKSPACE <span>⌄</span></div>
+    <button class="sidebar-new-task" id="sidebar-new-task" type="button"><span>＋</span> New task <kbd>↵</kbd></button><div class="workspace-label">WORKSPACE <span>⌄</span></div>
     <nav id="nav">
-      <button class="nav-item active" data-view="overview"><span>◫</span> Overview</button>
+      <button class="nav-item active" data-view="overview"><span>◫</span> Workspace</button>
       <button class="nav-item" data-view="council"><span>◎</span> CFA Council <em class="live-dot"></em></button>
       <button class="nav-item" data-view="brain"><span>◈</span> CFA Brain</button>
       <button class="nav-item" data-view="control"><span>⌘</span> CFA Control</button>
@@ -28,21 +28,21 @@
     <div class="content">
       <section class="view active" id="view-overview">
         <div class="workspace-intro">
-          <div class="eyebrow">SHEWIUN CFA</div>
-          <h1>Workspace</h1>
-          <p>Projects, decisions and shared knowledge in one place.</p>
+          <div class="eyebrow">CONTROL &amp; FOCUS ARCHITECTURE</div>
+          <h1>Make progress, with clarity.</h1>
+          <p>One workspace for coordinated thinking, explicit decisions and reusable team knowledge.</p>
         </div>
         <section class="workspace-composer panel">
-          <div class="composer-heading"><div><h2>What are we working on?</h2><p>Start with a task, question or decision.</p></div></div>
+          <div class="composer-heading"><div class="agent-mascot" id="workspace-mascot" aria-label="Shewiun assistant" role="img"><span class="mascot-eye mascot-eye-left"><i></i></span><span class="mascot-eye mascot-eye-right"><i></i></span><span class="mascot-mouth"></span></div><div><h2>What needs to move forward?</h2><p>Give the Council a goal. It will compare perspectives and return a clear recommendation.</p></div></div>
           <form id="workspace-form">
             <textarea id="workspace-prompt" rows="3" maxlength="4000" placeholder="Describe a goal, question or problem for your team…"></textarea>
-            <div class="composer-footer"><span><span class="composer-status"></span> CFA Council · Strategist · Skeptic · Builder</span><button class="btn primary" id="workspace-send" type="submit">Start working <span>↑</span></button></div>
+            <div class="composer-footer"><span><span class="composer-status"></span> <b>CFA Council</b> <span class="composer-divider">·</span> Strategy, risk, execution</span><button class="btn primary" id="workspace-send" type="submit">Start task <span>↑</span></button></div>
           </form>
           
           <div id="workspace-response" class="workspace-response" hidden></div>
         </section>
-        <div class="section-heading"><div><div class="eyebrow">YOUR SYSTEM</div><h2>Workspace overview</h2></div><span class="subtle">A single place to coordinate the work</span></div>
-        <div class="stat-grid"><article class="stat-card"><div class="stat-top"><span>Active projects</span><span class="stat-icon blue">▦</span></div><strong id="stat-projects">—</strong><small><i class="tiny-dot"></i> Workspace projects</small></article><article class="stat-card"><div class="stat-top"><span>Knowledge entries</span><span class="stat-icon violet">◈</span></div><strong id="stat-brain">—</strong><small>Source-aware shared context</small></article><article class="stat-card"><div class="stat-top"><span>Available agents</span><span class="stat-icon green">◎</span></div><strong id="stat-agents">—</strong><small>Coordinated in one workspace</small></article><article class="stat-card"><div class="stat-top"><span>Council sessions</span><span class="stat-icon gold">✳</span></div><strong id="stat-councils">—</strong><small>Discussion history saved</small></article></div>
+        <div class="section-heading"><div><div class="eyebrow">YOUR WORKSPACE</div><h2>At a glance</h2></div><span class="subtle">Knowledge and decisions stay connected</span></div>
+        <div class="stat-grid"><article class="stat-card"><div class="stat-top"><span>Active projects</span><span class="stat-icon blue">▦</span></div><strong id="stat-projects">—</strong><small>Track work from idea to delivery</small></article><article class="stat-card"><div class="stat-top"><span>Knowledge entries</span><span class="stat-icon violet">◈</span></div><strong id="stat-brain">—</strong><small>Facts, decisions and assumptions</small></article><article class="stat-card"><div class="stat-top"><span>Available agents</span><span class="stat-icon green">◎</span></div><strong id="stat-agents">—</strong><small>Distinct roles, one shared process</small></article><article class="stat-card"><div class="stat-top"><span>Council sessions</span><span class="stat-icon gold">✳</span></div><strong id="stat-councils">—</strong><small>Recommendations you can revisit</small></article></div>
         <div class="two-col"><section class="panel"><div class="panel-heading"><div><h3>Projects</h3><p>Work that moves the system forward</p></div><button class="text-button" data-go="control">View all ↗</button></div><div id="project-list" class="project-list"></div><button class="add-row" id="add-project">＋ Add project</button></section><section class="panel"><div class="panel-heading"><div><h3>Recent activity</h3><p>What has happened in your workspace</p></div><span class="mini-label">LIVE LOG</span></div><div id="activity-list" class="activity-list"></div></section></div>
       </section>
       <section class="view" id="view-council">
