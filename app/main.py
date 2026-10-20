@@ -377,7 +377,7 @@ def health() -> dict[str, Any]:
         "free_agent_available": True,
         "free_agent_name": "Gemini Flash (API key required; free-tier availability depends on Google account and current limits)",
         "database": "sqlite",
-        "storage_persistent": False,
+        "storage_persistent": not IS_VERCEL,
         "database_backend": "sqlite",
         "distributed_rate_limits": False,
         "durable_queue": False,
