@@ -9,9 +9,9 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import class_row
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolTimeout
 
-DATABASE_ERRORS = (sqlite3.Error, psycopg.Error)
+DATABASE_ERRORS = (sqlite3.Error, psycopg.Error, PoolTimeout)
 _POOLS: dict[str, ConnectionPool] = {}
 
 
