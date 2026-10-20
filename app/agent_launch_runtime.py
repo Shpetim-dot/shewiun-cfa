@@ -188,7 +188,7 @@ def _enforce_rules(memo: dict[str, Any], findings: list[dict[str, Any]]) -> dict
     return memo
 
 
-async def create_review(db_path: Path, answers: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
+async def create_review(db_path: Path, answers: dict[str, Any], request_id: str | None = None, *, allow_share: bool = True) -> dict[str, Any]:
     init_review_tables(db_path)
     if not model_configured():
         perspectives = {}
@@ -230,7 +230,9 @@ async def create_review(db_path: Path, answers: dict[str, Any], request_id: str 
         "deterministic": deterministic,
         "perspectives": perspectives,
         "decision": memo,
-        "share_url": f"/review/agent-launch/result/{share_token}",
+        "share_url": f"/review/agent-launch/result/{share_token}" if allow_share else None,
+        "storage_durable": allow_share,
+        "storage_warning": None if allow_share else "This Vercel deployment uses ephemeral SQLite storage. Results and share links are not durable until persistent PostgreSQL is configured.",
     }
     with _connect(db_path) as db:
         db.execute("INSERT INTO review_submissions VALUES (?, ?, ?, ?, ?, ?)",
