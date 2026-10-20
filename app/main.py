@@ -201,7 +201,10 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "app": "Shewiun CFA",
         "version": "0.2.0",
-        "model_configured": bool(os.getenv("CFA_MODEL_API_KEY")),
+        "model_configured": bool(os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME")),
+        "database": "sqlite",
+        "storage_persistent": not IS_VERCEL,
+        "queue": "in_process",
         "storage": "ephemeral_sqlite" if IS_VERCEL else "sqlite",
         "storage_warning": (
             "Vercel /tmp storage is ephemeral; data may be lost between instances or deployments."
