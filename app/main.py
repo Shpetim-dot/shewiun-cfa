@@ -133,7 +133,7 @@ async def security_and_access_middleware(request: Request, call_next):
         except ValueError:
             return _apply_security_headers(JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."}))
 
-    if auth_required() and _is_protected_api(path):
+    if auth_required() and (_is_protected_api(path) or path == "/api/auth/logout"):
         if not auth_configured():
             return _apply_security_headers(JSONResponse(status_code=503, content={
                 "detail": "Workspace access is locked until CFA_ACCESS_PASSWORD (minimum 16 characters) and CFA_SESSION_SECRET (minimum 32 characters) are configured in the server environment."
