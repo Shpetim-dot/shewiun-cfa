@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -8,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -17,8 +21,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .db import DATABASE_ERRORS, connect_db, database_backend, database_url
 from .agent_launch_rules import evaluate_agent_launch
-from .agent_launch_runtime import create_review, get_review_by_token, init_review_tables
+from .agent_launch_runtime import create_review, get_review_by_token, init_review_tables, _preview_result
+from .agent_launch_api import router as agent_launch_router, email_capture_enabled, lead_gate_enabled, privacy_notice_url
 
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,52 +46,146 @@ if not DB_PATH.is_absolute():
     DB_PATH = ROOT / DB_PATH
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Shewiun CFA", version="0.2.0", description="Control & Focus Architecture")
+app = FastAPI(title="Shewiun CFA", version="0.3.0", description="Control & Focus Architecture")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+app.include_router(agent_launch_router)
 
 _RATE_BUCKETS: dict[str, list[float]] = {}
-_RATE_LIMIT_PATHS = {"/api/runtime/runs", "/api/council", "/api/review/agent-launch/assess"}
+_RATE_LIMIT_PATHS = {
+    "/api/auth/login": 5,
+    "/api/runtime/runs": 10,
+    "/api/council": 10,
+    "/api/agents/run": 15,
+    "/api/review/agent-launch/assess": 10,
+    "/api/review/agent-launch/unlock": 10,
+    "/api/review/agent-launch/authorization-test-request": 5,
+    "/api/review/agent-launch/event": 30,
+}
+_AUTH_PROTECTED_PREFIXES = (
+    "/api/projects", "/api/brain", "/api/agents", "/api/council",
+    "/api/activity", "/api/security", "/api/runtime", "/api/review/agent-launch/admin",
+)
+
+
+def auth_required() -> bool:
+    configured = os.getenv("CFA_REQUIRE_AUTH", "").lower() in {"1", "true", "yes"}
+    return IS_VERCEL or configured
+
+
+def auth_configured() -> bool:
+    password = os.getenv("CFA_ACCESS_PASSWORD", "")
+    secret = os.getenv("CFA_SESSION_SECRET", "")
+    return len(password) >= 16 and len(secret) >= 32
+
+
+def _session_token(expiry: int) -> str:
+    secret = os.getenv("CFA_SESSION_SECRET", "").encode()
+    payload = str(expiry).encode()
+    encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    signature = hmac.new(secret, encoded.encode(), hashlib.sha256).hexdigest()
+    return encoded + "." + signature
+
+
+def _valid_session(token: str | None) -> bool:
+    if not token or not auth_configured():
+        return False
+    try:
+        encoded, signature = token.split(".", 1)
+        expected = hmac.new(os.getenv("CFA_SESSION_SECRET", "").encode(), encoded.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return False
+        payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        return int(payload.decode()) > int(time.time())
+    except (ValueError, TypeError, UnicodeDecodeError):
+        return False
+
+
+def _is_protected_api(path: str) -> bool:
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in _AUTH_PROTECTED_PREFIXES)
+
+
+def _same_origin(request: Request) -> bool:
+    origin_value = request.headers.get("origin")
+    if not origin_value:
+        return False
+    try:
+        origin = urlsplit(origin_value)
+    except ValueError:
+        return False
+    host = request.headers.get("host", "").lower()
+    if not host or origin.netloc.lower() != host or origin.username or origin.password:
+        return False
+    if IS_VERCEL:
+        return origin.scheme == "https"
+    return origin.scheme == request.url.scheme
+
 
 @app.middleware("http")
-async def security_headers(request: Request, call_next):
-    if request.url.path in _RATE_LIMIT_PATHS:
-        client_ip = request.client.host if request.client else "unknown"
-        bucket_key = request.url.path + ":" + client_ip
-        now_mono = time.monotonic()
-        hits = [stamp for stamp in _RATE_BUCKETS.get(bucket_key, []) if now_mono - stamp < 60]
-        if len(hits) >= 30:
-            return JSONResponse(status_code=429, content={"detail": "Rate limit reached. Wait one minute and retry."},
-                                headers={"Retry-After": "60"})
-        hits.append(now_mono)
-        _RATE_BUCKETS[bucket_key] = hits
-        if len(_RATE_BUCKETS) > 2000:
-            for key in list(_RATE_BUCKETS)[:500]:
-                if not _RATE_BUCKETS[key] or now_mono - _RATE_BUCKETS[key][-1] >= 60:
-                    _RATE_BUCKETS.pop(key, None)
+async def security_and_access_middleware(request: Request, call_next):
+    path = request.url.path
+    now_mono = time.monotonic()
+    rate_limit = _RATE_LIMIT_PATHS.get(path)
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        if rate_limit is None and path.startswith("/api/"):
+            rate_limit = 60
+        if rate_limit is not None:
+            client_ip = request.client.host if request.client else "unknown"
+            bucket_key = path + ":" + client_ip
+            if database_backend() == "postgresql":
+                try:
+                    allowed = _consume_distributed_rate_limit(bucket_key, rate_limit)
+                except DATABASE_ERRORS:
+                    return _apply_security_headers(JSONResponse(status_code=503, content={
+                        "detail": "Shared rate-limit storage is unavailable; request rejected."
+                    }))
+                if not allowed:
+                    return _apply_security_headers(JSONResponse(status_code=429, content={
+                        "detail": "Rate limit reached. Wait one minute and retry."
+                    }, headers={"Retry-After": "60"}))
+            else:
+                hits = [stamp for stamp in _RATE_BUCKETS.get(bucket_key, []) if now_mono - stamp < 60]
+                if len(hits) >= rate_limit:
+                    response = JSONResponse(status_code=429, content={"detail": "Rate limit reached. Wait one minute and retry."},
+                                             headers={"Retry-After": "60"})
+                    return _apply_security_headers(response)
+                hits.append(now_mono)
+                _RATE_BUCKETS[bucket_key] = hits
+                if len(_RATE_BUCKETS) > 2000:
+                    for key in list(_RATE_BUCKETS)[:500]:
+                        if not _RATE_BUCKETS[key] or now_mono - _RATE_BUCKETS[key][-1] >= 60:
+                            _RATE_BUCKETS.pop(key, None)
     content_length = request.headers.get("content-length")
     if content_length:
         try:
             if int(content_length) > 1_000_000:
-                return JSONResponse(status_code=413, content={"detail": "Request body too large."})
+                return _apply_security_headers(JSONResponse(status_code=413, content={"detail": "Request body too large."}))
         except ValueError:
-            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
-    response = await call_next(request)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
-    return response
+            return _apply_security_headers(JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."}))
 
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
+    if auth_required() and (_is_protected_api(path) or path == "/api/auth/logout"):
+        if not auth_configured():
+            return _apply_security_headers(JSONResponse(status_code=503, content={
+                "detail": "Workspace access is locked until CFA_ACCESS_PASSWORD (minimum 16 characters) and CFA_SESSION_SECRET (minimum 32 characters) are configured in the server environment."
+            }))
+        if not _valid_session(request.cookies.get("cfa_session")):
+            return _apply_security_headers(JSONResponse(status_code=401, content={"detail": "Sign in to access the workspace."}))
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not _same_origin(request):
+            return _apply_security_headers(JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected."}))
+
     response = await call_next(request)
+    return _apply_security_headers(response)
+
+
+def _apply_security_headers(response):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
+    if IS_VERCEL:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
     response.headers.setdefault("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
     return response
 
@@ -104,19 +204,35 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def connect() -> sqlite3.Connection:
-    # A short lock wait prevents transient concurrent writes from failing immediately.
-    # Foreign-key enforcement is connection-local in SQLite, so enable it consistently.
-    db = sqlite3.connect(DB_PATH, timeout=15)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA busy_timeout = 15000")
-    db.execute("PRAGMA foreign_keys = ON")
-    return db
+def connect():
+    # Explicit SQLite paths are retained for tests and local development.
+    return connect_db(None if database_url() else DB_PATH)
+
+
+def _consume_distributed_rate_limit(bucket_key: str, limit: int) -> bool:
+    current = time.time()
+    with connect() as db:
+        row = db.execute(
+            """INSERT INTO api_rate_limits (bucket_key, window_started_at, count)
+               VALUES (?, ?, 1)
+               ON CONFLICT(bucket_key) DO UPDATE SET
+                 count = CASE
+                   WHEN excluded.window_started_at - api_rate_limits.window_started_at >= 60 THEN 1
+                   ELSE api_rate_limits.count + 1
+                 END,
+                 window_started_at = CASE
+                   WHEN excluded.window_started_at - api_rate_limits.window_started_at >= 60
+                   THEN excluded.window_started_at ELSE api_rate_limits.window_started_at
+                 END
+               RETURNING count""",
+            (bucket_key, current),
+        ).fetchone()
+    return bool(row and row[0] <= limit)
 
 
 def init_db() -> None:
     with connect() as db:
-        db.executescript("""
+        schema = """
         CREATE TABLE IF NOT EXISTS projects (
           id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
           status TEXT NOT NULL DEFAULT 'Active', created_at TEXT NOT NULL
@@ -125,6 +241,11 @@ def init_db() -> None:
           id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL,
           kind TEXT NOT NULL DEFAULT 'Fact', source TEXT NOT NULL DEFAULT 'User input',
           confidence INTEGER NOT NULL DEFAULT 80, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS agents (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, role TEXT NOT NULL,
+          instructions TEXT NOT NULL DEFAULT '', icon TEXT NOT NULL DEFAULT 'bot',
+          created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS council (
           id TEXT PRIMARY KEY, topic TEXT NOT NULL, result TEXT NOT NULL,
@@ -150,21 +271,27 @@ def init_db() -> None:
           started_at TEXT, finished_at TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_runtime_runs_status_created ON runtime_runs(status, created_at);
+        CREATE TABLE IF NOT EXISTS api_rate_limits (
+          bucket_key TEXT PRIMARY KEY, window_started_at DOUBLE PRECISION NOT NULL, count INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS runtime_events (
           seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, event_type TEXT NOT NULL,
           payload_json TEXT NOT NULL, created_at TEXT NOT NULL,
           FOREIGN KEY(run_id) REFERENCES runtime_runs(id)
         );
-        """)
+        """
+        if database_backend() == "postgresql":
+            schema = schema.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY")
+        db.executescript(schema)
         if db.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0:
             db.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?)", (
                 "proj-cfa", "Shewiun CFA MVP", "Build the control center for collaborative AI agents.", "Active", now()
             ))
         if db.execute("SELECT COUNT(*) FROM brain").fetchone()[0] == 0:
             samples = [
-                ("CFA principle", "CFA coordinates external models and agents; it is not itself a new foundation model.", "Rule", "Product brief", 95),
-                ("Shared knowledge", "Knowledge entries should keep their source and confidence visible.", "Decision", "Product brief", 90),
-                ("Human oversight", "High-impact actions should require explicit human approval.", "Rule", "Security baseline", 95),
+                ("CFA principle", "CFA coordinates external models and agents; it is not itself a new foundation model. Related notes: [[Shared knowledge]] and [[Human oversight]].", "Rule", "Product brief", 95),
+                ("Shared knowledge", "Knowledge entries should keep their source and confidence visible. Connect validated findings to [[CFA principle]] and [[Human oversight]].", "Decision", "Product brief", 90),
+                ("Human oversight", "High-impact actions should require explicit human approval. This rule supports [[CFA principle]] and [[Shared knowledge]].", "Rule", "Security baseline", 95),
             ]
             for title, content, kind, source, confidence in samples:
                 db.execute("INSERT INTO brain VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -181,7 +308,7 @@ _runtime_worker_task: asyncio.Task | None = None
 async def startup() -> None:
     global _runtime_worker_task
     init_db()
-    init_review_tables(DB_PATH)
+    init_review_tables(None if database_url() else DB_PATH)
     # Single-process SQLite MVP: recover interrupted runs after restart.
     with connect() as db:
         db.execute("UPDATE runtime_runs SET status='queued', updated_at=?, error=NULL WHERE status='running'", (now(),))
@@ -243,8 +370,20 @@ class BrainIn(BaseModel):
 
 class CouncilIn(BaseModel):
     topic: str = Field(min_length=3, max_length=4000)
-    roles: list[str] = Field(default_factory=lambda: ["Strategist", "Skeptic", "Builder"])
+    roles: list[str] = Field(default_factory=list, max_length=12)
     rounds: int = Field(default=1, ge=1, le=2)
+
+
+class AgentCreateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=48)
+    role: str = Field(min_length=3, max_length=120)
+    instructions: str = Field(default="", max_length=1200)
+    icon: str = Field(default="bot", pattern=r"^(bot|compass|shield-check|wrench|book-open|chart-no-axes-combined|search|workflow)$")
+
+
+class AgentRunIn(BaseModel):
+    topic: str = Field(min_length=3, max_length=4000)
+    agent_id: str = Field(default="local-planner", min_length=1, max_length=80)
 
 
 @app.get("/")
@@ -252,24 +391,97 @@ def home() -> FileResponse:
     return FileResponse(STATIC / "index.html")
 
 
+class LoginIn(BaseModel):
+    password: str = Field(min_length=1, max_length=512)
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request) -> dict[str, Any]:
+    required = auth_required()
+    configured = auth_configured()
+    return {
+        "required": required,
+        "configured": configured,
+        "authenticated": (not required) or _valid_session(request.cookies.get("cfa_session")),
+        "setup_message": (
+            "Configure CFA_ACCESS_PASSWORD (16+ characters) and CFA_SESSION_SECRET (32+ characters) in Vercel Environment Variables."
+            if required and not configured else None
+        ),
+    }
+
+
+@app.post("/api/auth/login")
+def auth_login(item: LoginIn, request: Request):
+    if not auth_required():
+        return {"ok": True, "auth_required": False}
+    if not auth_configured():
+        raise HTTPException(status_code=503, detail="Workspace authentication is not configured.")
+    if not hmac.compare_digest(item.password, os.getenv("CFA_ACCESS_PASSWORD", "")):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    expiry = int(time.time()) + 8 * 60 * 60
+    response = JSONResponse({"ok": True, "expires_in": 8 * 60 * 60})
+    response.set_cookie(
+        "cfa_session", _session_token(expiry), max_age=8 * 60 * 60, httponly=True,
+        secure=(request.url.scheme == "https" or IS_VERCEL), samesite="strict", path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("cfa_session", path="/", httponly=True, secure=IS_VERCEL, samesite="strict")
+    return response
+
+
+def database_connection_ok() -> bool:
+    try:
+        with connect() as db:
+            db.execute("SELECT 1").fetchone()
+        return True
+    except DATABASE_ERRORS:
+        return False
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    db_ok = database_connection_ok()
     return {
         "status": "ok",
         "app": "Shewiun CFA",
-        "version": "0.2.0",
+        "version": "0.3.0",
+        "auth_required": auth_required(),
+        "auth_configured": auth_configured(),
+        "authentication": "configured" if auth_configured() else ("required_but_missing" if auth_required() else "development_open"),
         "model_configured": model_provider_configured(),
         "model_provider": "Google Gemini API" if os.getenv("GEMINI_API_KEY") else ("OpenAI-compatible" if os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME") else None),
         "model_name": configured_model_name(),
         "free_agent_available": True,
         "free_agent_name": "Gemini Flash (API key required; free-tier availability depends on Google account and current limits)",
-        "database": "sqlite",
-        "storage_persistent": not IS_VERCEL,
+        "database": database_backend(),
+        "database_connection_ok": db_ok,
+        "storage_persistent": database_backend() == "postgresql" or not IS_VERCEL,
+        "database_backend": database_backend(),
+        "distributed_rate_limits": database_backend() == "postgresql",
+        "durable_queue": False,
+        "email_unlock_configured": email_capture_enabled(),
+        "retention_configured": len(os.getenv("CRON_SECRET", "")) >= 32,
+        "production_ready": False,
+        "readiness_blockers": [
+            *(["workspace authentication secrets are not configured"] if auth_required() and not auth_configured() else []),
+            *(["persistent PostgreSQL storage is not configured"] if database_backend() != "postgresql" else []),
+            *(["configured PostgreSQL connection is unavailable"] if database_backend() == "postgresql" and not db_ok else []),
+            *(["rate limiting is process-local, not distributed"] if database_backend() != "postgresql" else []),
+            "background orchestration queue is process-local",
+            *(["model provider key is not configured"] if not model_provider_configured() else []),
+            *(["public HTTPS privacy notice is not configured for email capture"] if IS_VERCEL and not privacy_notice_url() else []),
+            *(["CRON_SECRET is not configured for retention automation"] if IS_VERCEL and len(os.getenv("CRON_SECRET", "")) < 32 else []),
+        ],
         "queue": "in_process",
-        "storage": "ephemeral_sqlite" if IS_VERCEL else "sqlite",
+        "storage": "postgresql" if database_backend() == "postgresql" else ("ephemeral_sqlite" if IS_VERCEL else "sqlite"),
         "storage_warning": (
             "Vercel /tmp storage is ephemeral; data may be lost between instances or deployments."
-            if IS_VERCEL else None
+            if IS_VERCEL and database_backend() != "postgresql" else None
         ),
     }
 
@@ -307,18 +519,122 @@ def create_brain(item: BrainIn) -> dict[str, Any]:
 
 
 AGENTS = [
-    {"id": "strategist", "name": "Strategist", "role": "Direction & priorities", "provider": "CFA demo", "status": "Ready", "color": "violet"},
-    {"id": "skeptic", "name": "Skeptic", "role": "Risks & counterarguments", "provider": "CFA demo", "status": "Ready", "color": "amber"},
-    {"id": "builder", "name": "Builder", "role": "Implementation & next steps", "provider": "CFA demo", "status": "Ready", "color": "mint"},
-    {"id": "synthesizer", "name": "Synthesizer", "role": "Decision & summary", "provider": "CFA demo", "status": "Ready", "color": "blue"},
+    {"id": "strategist", "name": "Strategist", "role": "Direction & priorities", "icon": "compass", "color": "violet"},
+    {"id": "skeptic", "name": "Skeptic", "role": "Risks & counterarguments", "icon": "shield-check", "color": "amber"},
+    {"id": "builder", "name": "Builder", "role": "Implementation & next steps", "icon": "wrench", "color": "mint"},
+    {"id": "synthesizer", "name": "Synthesizer", "role": "Decision & summary", "icon": "workflow", "color": "blue"},
+    {"id": "local-planner", "name": "Local Planner", "role": "Free, rules-based planning", "icon": "compass", "color": "blue", "free": True},
 ]
 
 
-@app.get("/api/agents")
-def list_agents() -> list[dict[str, str]]:
+def _agent_records() -> list[dict[str, Any]]:
     live = model_provider_configured()
-    return [{**a, "provider": configured_model_name() if live else "Not configured",
-             "status": "Connected" if live else "Demo mode"} for a in AGENTS]
+    records = []
+    for agent in AGENTS:
+        records.append({**agent, "instructions": "", "provider": "Built-in · free" if agent.get("free") else (configured_model_name() if live else "Model not configured"),
+                        "status": "Available offline" if agent.get("free") else ("Connected" if live else "Ready when a model is configured")})
+    with connect() as db:
+        custom = [dict(row) for row in db.execute("SELECT id, name, role, instructions, icon, created_at FROM agents ORDER BY created_at ASC")]
+    for agent in custom:
+        agent.update({"provider": configured_model_name() if live else "Built-in · free fallback",
+                      "status": "Connected" if live else "Available in free mode", "color": "blue", "custom": True})
+    return records + custom
+
+
+@app.get("/api/agents")
+def list_agents() -> list[dict[str, Any]]:
+    return _agent_records()
+
+
+@app.post("/api/agents")
+def create_agent(item: AgentCreateIn) -> dict[str, Any]:
+    name = item.name.strip()
+    role = item.role.strip()
+    if not name or not role:
+        raise HTTPException(status_code=422, detail="Agent name and role are required.")
+    if name.casefold() in {agent["name"].casefold() for agent in _agent_records()}:
+        raise HTTPException(status_code=409, detail="An agent with this name already exists.")
+    record = {"id": str(uuid4()), "name": name, "role": role, "instructions": item.instructions.strip(),
+              "icon": item.icon, "created_at": now()}
+    with connect() as db:
+        db.execute("INSERT INTO agents (id, name, role, instructions, icon, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                   (record["id"], record["name"], record["role"], record["instructions"], record["icon"], record["created_at"]))
+    log("Agent created", f"{name} · {role}")
+    return {**record, "provider": configured_model_name() if model_provider_configured() else "Built-in · free fallback",
+            "status": "Connected" if model_provider_configured() else "Available in free mode", "color": "blue", "custom": True}
+
+
+@app.delete("/api/agents/{agent_id}")
+def delete_agent(agent_id: str) -> dict[str, str]:
+    if agent_id in {agent["id"] for agent in AGENTS}:
+        raise HTTPException(status_code=400, detail="Built-in agents cannot be deleted.")
+    with connect() as db:
+        cursor = db.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+    log("Agent deleted", agent_id)
+    return {"status": "deleted"}
+
+
+def _free_agent_reply(agent: dict[str, Any], topic: str, brain: list[dict[str, Any]]) -> str:
+    words = {word.lower().strip(".,:;!?()[]{}") for word in topic.split() if len(word) > 3}
+    relevant = []
+    for entry in brain:
+        text = f"{entry.get('title', '')} {entry.get('content', '')}".lower()
+        overlap = sum(1 for word in words if word in text)
+        if overlap:
+            relevant.append((overlap, entry))
+    relevant.sort(key=lambda pair: (-pair[0], pair[1].get("created_at", "")))
+    context = "\n".join(f"- {entry['title']} ({entry['kind']}, confidence {entry['confidence']}%): {entry['content'][:360]}" for _, entry in relevant[:4])
+    if not context:
+        context = "- No directly matching Brain entries. Treat unverified claims as assumptions and record validated findings in Brain."
+    steps = [
+        "Define the desired outcome and one measurable success criterion.",
+        "Break the work into the smallest testable next step; assign an owner and a completion condition.",
+        "Validate the highest-impact assumption with evidence before expanding scope.",
+        "Record the decision, source and confidence in CFA Brain so later tasks can reuse it.",
+    ]
+    role = agent.get("role", "")
+    if any(word in role.lower() for word in ("risk", "security", "skeptic", "compliance")):
+        steps = ["List assets, stakeholders and failure modes.", "Rank risks by impact and likelihood; separate known facts from assumptions.", "Add a human approval or rollback path for consequential actions.", "Define evidence that would change the recommendation."]
+    elif any(word in role.lower() for word in ("build", "implement", "engineer", "developer")):
+        steps = ["Define a thin end-to-end slice and acceptance criteria.", "Identify dependencies and the smallest implementation sequence.", "Add tests for the main path and one failure path.", "Ship to a preview, validate with a real task, then expand."]
+    elif any(word in role.lower() for word in ("research", "analyst", "strategy", "strategist")):
+        steps = ["State the decision and alternatives explicitly.", "List evidence needed to compare the alternatives.", "Identify the assumptions most likely to change the decision.", "Recommend the next low-cost experiment."]
+    instruction = agent.get("instructions", "").strip()
+    instruction_line = f"\nRole guidance: {instruction}" if instruction else ""
+    numbered = "\n".join(f"{i+1}. {step}" for i, step in enumerate(steps))
+    return (f"Task\n{topic}\n\nRelevant CFA Brain context\n{context}\n\nProposed next steps\n{numbered}"
+            f"\n\nRisks and assumptions\n- This is a deterministic, rules-based result, not an LLM-generated answer.\n"
+            "- The prompt may omit constraints, budget, ownership or deadline; confirm these before acting.\n"
+            "- Do not treat suggested steps as verified facts.\n\nNext question\nWhat observable result would make this task successful?"
+            f"{instruction_line}")
+
+
+@app.post("/api/agents/run")
+async def run_agent(item: AgentRunIn) -> dict[str, Any]:
+    agent = next((a for a in _agent_records() if a["id"] == item.agent_id), None)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+    with connect() as db:
+        brain = [dict(row) for row in db.execute("SELECT * FROM brain ORDER BY created_at DESC LIMIT 100")]
+    context = "\n".join(f"{entry['title']}: {entry['content'][:300]}" for entry in brain[:12])
+    live = model_provider_configured() and item.agent_id != "local-planner"
+    try:
+        reply = await model_reply(agent["name"], item.topic, context) if live else _free_agent_reply(agent, item.topic, brain)
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Agent run failed; no result was stored.") from exc
+    if not reply or not reply.strip():
+        raise HTTPException(status_code=502, detail="Agent returned no content.")
+    transcript = [{"role": agent["name"], "content": reply}]
+    record = {"id": str(uuid4()), "topic": item.topic, "result": reply, "transcript": json.dumps(transcript, ensure_ascii=False),
+              "mode": "live" if live else "local-free", "created_at": now()}
+    with connect() as db:
+        db.execute("INSERT INTO council VALUES (?, ?, ?, ?, ?, ?)",
+                   (record["id"], record["topic"], record["result"], record["transcript"], record["mode"], record["created_at"]))
+    log("Agent task completed", f"{agent['name']}: {item.topic[:140]}")
+    return {**record, "transcript": transcript, "agent": agent, "context_entries": [entry["title"] for entry in brain[:4]],
+            "mode_label": "Model-backed" if live else "Free · local rules"}
 
 
 async def model_reply(role: str, topic: str, context: str) -> str | None:
@@ -373,7 +689,9 @@ def demo_reply(role: str, topic: str, context: str) -> str:
 
 @app.post("/api/council")
 async def start_council(item: CouncilIn) -> dict[str, Any]:
-    roles = [r for r in item.roles if r in {"Strategist", "Skeptic", "Builder"}]
+    available = _agent_records()
+    allowed = {agent["name"] for agent in available if agent["name"] != "Synthesizer"}
+    roles = [role for role in item.roles if role in allowed][:8]
     if not roles:
         roles = ["Strategist", "Skeptic", "Builder"]
     if "Synthesizer" not in roles:
@@ -381,21 +699,27 @@ async def start_council(item: CouncilIn) -> dict[str, Any]:
     transcript: list[dict[str, str]] = []
     context = ""
     live = model_provider_configured()
-    if not live:
-        raise HTTPException(status_code=503, detail="No model configured. Add GEMINI_API_KEY for the Gemini Flash integration, or set CFA_MODEL_API_KEY and CFA_MODEL_NAME.")
+    with connect() as db:
+        brain_context = [dict(row) for row in db.execute("SELECT * FROM brain ORDER BY created_at DESC LIMIT 100")]
     try:
         for _ in range(item.rounds):
             for role in roles:
-                reply = await model_reply(role, item.topic, context)
+                agent = next((a for a in available if a["name"] == role), {"name": role, "role": role, "instructions": ""})
+                use_model = live and not agent.get("free")
+                if role == "Synthesizer" and not use_model:
+                    reply = ("Council synthesis\nTopic: " + item.topic + "\n\nPerspectives considered\n" + context +
+                             "\n\nDecision frame\nUse these perspectives as hypotheses, not verified facts. Choose one small next step, define an observable success measure, and save validated decisions to CFA Brain.")
+                else:
+                    reply = await model_reply(role, item.topic, context) if use_model else _free_agent_reply(agent, item.topic, brain_context)
                 if not reply:
-                    raise ValueError(f"The configured model returned no content for role {role}.")
+                    raise ValueError(f"The configured agent returned no content for role {role}.")
                 transcript.append({"role": role, "content": reply})
                 context += f"\n{role}: {reply}"
     except (httpx.HTTPError, KeyError, ValueError) as exc:
         raise HTTPException(status_code=502, detail=f"Configured model request failed: {exc}") from exc
     result = next((m["content"] for m in reversed(transcript) if m["role"] == "Synthesizer"), transcript[-1]["content"])
     record = {"id": str(uuid4()), "topic": item.topic, "result": result,
-              "transcript": json.dumps(transcript, ensure_ascii=False), "mode": "live" if live else "demo",
+              "transcript": json.dumps(transcript, ensure_ascii=False), "mode": "live" if live else "local-free",
               "created_at": now()}
     with connect() as db:
         db.execute("INSERT INTO council VALUES (:id, :topic, :result, :transcript, :mode, :created_at)", record)
@@ -742,9 +1066,11 @@ def agent_launch_review_result_page(share_token: str) -> FileResponse:
 
 @app.get("/api/review/agent-launch/result/{share_token}")
 def get_agent_launch_result(share_token: str) -> dict[str, Any]:
-    result = get_review_by_token(DB_PATH, share_token)
+    result = get_review_by_token(None if database_url() else DB_PATH, share_token, require_lead=lead_gate_enabled())
     if result is None:
         raise HTTPException(status_code=404, detail="Review not found or link revoked.")
+    if result.get("lead_required"):
+        result["privacy_notice_url"] = privacy_notice_url()
     return result
 
 
@@ -754,8 +1080,8 @@ async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
     if len(encoded) > 20000:
         raise HTTPException(status_code=413, detail="Answers exceed the 20 KB limit.")
     try:
-        result = await create_review(DB_PATH, item.answers, allow_share=not IS_VERCEL)
-    except sqlite3.Error:
+        result = await create_review(None if database_url() else DB_PATH, item.answers, allow_share=(database_backend() == "postgresql" or not IS_VERCEL))
+    except DATABASE_ERRORS:
         raise HTTPException(status_code=503, detail="Review storage is unavailable. Please try again later.")
     if not result["model_configured"]:
         result["assessment_type"] = "deterministic_self_assessment"
@@ -764,4 +1090,8 @@ async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
     result["finding_count"] = result["deterministic"]["finding_count"]
     result["note"] = ("Model-backed perspectives and synthesis completed." if result["model_configured"]
                       else "No model was called. This is a deterministic self-assessment preview only.")
+    if lead_gate_enabled():
+        preview = _preview_result(result)
+        preview["privacy_notice_url"] = privacy_notice_url()
+        return preview
     return result

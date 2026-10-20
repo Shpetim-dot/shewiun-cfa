@@ -17,7 +17,7 @@
 .memo-section summary{cursor:pointer;font-weight:500}
 .verdict{font-size:19px;padding:14px 0;border-bottom:1px solid var(--line,#dedbd5)}
 #result input[readonly]{width:100%;margin-top:6px}
-</style>
+.analytics-consent{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.analytics-consent strong{margin-right:4px}.analytics-consent .btn{padding:5px 9px;font-size:11px}</style>
 </head>
 <body>
 <main class="page">
@@ -26,6 +26,7 @@
 <div class="title-row"><span class="mascot" aria-hidden="true"></span><h1>Review your agent launch</h1></div>
 <p>Answer a few questions about the agent’s purpose, permissions and controls to identify launch risks that need review.</p>
 <div class="notice"><strong>Self-assessment only.</strong> This is not a security test, audit, or certification. Do not enter secrets, API keys, credentials, or customer data. Describe credential types without sharing the credentials themselves.</div>
+<div class="notice analytics-consent hidden" id="analytics-consent"><strong>Optional usage analytics.</strong> Allow anonymous funnel events to help improve this review, or continue without analytics. <button type="button" class="btn" id="analytics-allow">Allow analytics</button> <button type="button" class="btn" id="analytics-decline">Continue without</button></div>
 </section>
 <div class="step-meta"><span id="step-label">Step 1 of 6</span><span>Required fields marked *</span></div><div class="track"><span id="progress"></span></div>
 <form id="review-form" novalidate>
@@ -91,6 +92,17 @@ function renderResult(data){
   if(Object.keys(perspectives).length)html+=section('Independent perspectives',Object.entries(perspectives).map(([role,p])=>'<details><summary>'+escapeHtml(role)+'</summary><p>'+escapeHtml(p.summary||'')+'</p>'+list(p.recommendations||[])+'</details>').join(''));
   html+='<p class="smallprint">Playbook '+escapeHtml(data.playbook_version||'1.0.0')+' · '+escapeHtml(data.created_at||'')+' · Model: '+escapeHtml(data.model||'Not used')+'</p>';
   if(data.share_url)html+='<p><label>Private read-only link</label><input readonly value="'+escapeHtml(location.origin+data.share_url)+'" onclick="this.select()"></p>';
+  if(data.share_url){
+   const token=data.share_url.split("/").pop();
+   if(data.lead_required){
+    const privacy=data.privacy_notice_url?'<a href="'+escapeHtml(data.privacy_notice_url)+'" target="_blank" rel="noopener noreferrer">Privacy notice</a>':'';
+    html+=section('Unlock the full memo','<p>Enter your email to unlock the full decision memo. Your email is stored with this review for up to 90 days. '+privacy+'</p><form id="lead-unlock-form" data-token="'+escapeHtml(token)+'" class="lead-form"><label>Email address<input name="email" type="email" required maxlength="254" autocomplete="email"></label><label class="consent-line"><input name="consent" type="checkbox" required> I consent to storing this email with the review to unlock the memo.</label><button class="btn primary" type="submit">Unlock memo</button><p id="lead-error" class="warning hidden" role="alert"></p></form><p class="smallprint">No email is sent automatically. You can continue using the deterministic preview without providing an email.</p>');
+   }else if(memo){
+    html+=section('Request a SHEWIUN Authorization Test','<p>Request a separate, scoped authorization test. This form records a request; it does not run a test or certify the agent. '+(data.privacy_notice_url?'<a href="'+escapeHtml(data.privacy_notice_url)+'" target="_blank" rel="noopener noreferrer">Privacy notice</a>':'')+'</p><form id="authorization-test-form" data-token="'+escapeHtml(token)+'" class="lead-form"><label>Name<input name="name" required maxlength="160" autocomplete="name"></label><label>Work email<input name="email" type="email" required maxlength="254" autocomplete="email"></label><label>Company (optional)<input name="company" maxlength="200" autocomplete="organization"></label><label>Role<input name="role" required maxlength="160"></label><label>Agent and test scope<textarea name="use_case" required minlength="10" maxlength="3000" placeholder="Describe the agent, tools, intended environment, and scope you want tested."></textarea></label><label class="consent-line"><input name="consent" type="checkbox" required> I agree to be contacted about this request and understand request data is retained for up to 90 days.</label><button class="btn primary" type="submit">Request Authorization Test</button><p id="test-request-status" class="smallprint" role="status"></p></form>');
+   }
+  }
+  if(memo)html+='<div class="actions"><button class="btn" type="button" id="print-memo">Print / Save as PDF</button></div>';
+
  }else{
   html+='<p>'+escapeHtml(data.preliminary_status||'')+'</p><div class="notice"><strong>Self-assessment only.</strong> '+escapeHtml(data.disclaimer||'This is not a security test, audit, or certification.')+'</div><p>'+escapeHtml(data.finding_count||0)+' deterministic finding(s)</p>';
   html+=findings.map(f=>'<article class="finding"><h3><span class="severity '+escapeHtml(f.severity)+'">'+escapeHtml(f.severity)+'</span>'+escapeHtml(f.title)+'</h3><p>'+escapeHtml(f.detail)+'</p></article>').join('');
@@ -98,10 +110,24 @@ function renderResult(data){
  html+='<div class="actions"><button class="btn" id="edit-answers">Edit answers</button><button class="btn primary" id="start-over">Start over</button></div>';
  host.innerHTML=html;
  const edit=document.querySelector("#edit-answers");if(edit)edit.onclick=()=>{host.classList.add("hidden");form.classList.remove("hidden");document.querySelector(".step-meta").classList.remove("hidden");document.querySelector(".track").classList.remove("hidden");showStep()};
+
+ const printButton=document.querySelector("#print-memo");if(printButton)printButton.onclick=()=>{trackReviewEvent("pdf_downloaded",{},data.share_url||null);window.print();};
+ if(data.share_url)trackReviewEvent("result_viewed",{},data.share_url);
+ const unlockForm=document.querySelector("#lead-unlock-form");
+ if(unlockForm)unlockForm.onsubmit=async e=>{e.preventDefault();trackReviewEvent("cta_clicked",{cta:"unlock_memo"},data.share_url||null);const error=document.querySelector("#lead-error");const button=unlockForm.querySelector('button[type="submit"]');button.disabled=true;try{const response=await fetch("/api/review/agent-launch/unlock",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({share_token:unlockForm.dataset.token,email:unlockForm.elements.email.value,consent:unlockForm.elements.consent.checked})});const data=await response.json();if(!response.ok)throw new Error(data.detail||"Could not unlock memo");renderResult(data)}catch(e){error.textContent=e.message;error.classList.remove("hidden")}finally{button.disabled=false}};
+ const testForm=document.querySelector("#authorization-test-form");
+ if(testForm)testForm.onsubmit=async e=>{e.preventDefault();trackReviewEvent("cta_clicked",{cta:"authorization_test"},data.share_url||null);const status=document.querySelector("#test-request-status");const button=testForm.querySelector('button[type="submit"]');button.disabled=true;status.textContent="Submitting request…";try{const response=await fetch("/api/review/agent-launch/authorization-test-request",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({share_token:testForm.dataset.token,name:testForm.elements.name.value,email:testForm.elements.email.value,company:testForm.elements.company.value,role:testForm.elements.role.value,use_case:testForm.elements.use_case.value,consent:testForm.elements.consent.checked})});const data=await response.json();if(!response.ok)throw new Error(data.detail||"Could not submit request");status.textContent=data.note||"Request recorded.";testForm.reset()}catch(e){status.textContent=e.message}finally{button.disabled=false}};
  const reset=document.querySelector("#start-over");if(reset)reset.onclick=()=>location.href="/review/agent-launch";
 }
+function trackReviewEvent(event_name,metadata={},share_url=null){
+ try{if(localStorage.getItem("alr_analytics_consent")!=="yes")return;}catch{return;}
+ const pathToken=location.pathname.split("/").pop();
+ const token=share_url?String(share_url).split("/").pop():(/^[a-f0-9]{64}$/.test(pathToken)?pathToken:null);
+ fetch("/api/review/agent-launch/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event_name,share_token:token,metadata,analytics_consent:true})}).catch(()=>{});
+}
+const analyticsBanner=document.querySelector("#analytics-consent");let analyticsChoice=null;try{analyticsChoice=localStorage.getItem("alr_analytics_consent")}catch{}if(!analyticsChoice&&analyticsBanner)analyticsBanner.classList.remove("hidden");document.querySelector("#analytics-allow")?.addEventListener("click",()=>{try{localStorage.setItem("alr_analytics_consent","yes")}catch{}if(analyticsBanner)analyticsBanner.classList.add("hidden");trackReviewEvent("page_view",{})});document.querySelector("#analytics-decline")?.addEventListener("click",()=>{try{localStorage.setItem("alr_analytics_consent","no")}catch{}if(analyticsBanner)analyticsBanner.classList.add("hidden")});if(analyticsChoice==="yes")trackReviewEvent("page_view",{});
 function escapeHtml(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 const resultToken=location.pathname.match(/\/review\/agent-launch\/result\/([a-f0-9]{32,})$/);if(resultToken){form.classList.add("hidden");document.querySelector(".step-meta").classList.add("hidden");document.querySelector(".track").classList.add("hidden");document.querySelector("#result").classList.remove("hidden");document.querySelector("#result").textContent="Loading saved review…";fetch("/api/review/agent-launch/result/"+resultToken[1]).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.detail||"Review not found");renderResult(d)}).catch(e=>{document.querySelector("#result").textContent=e.message})}
-document.querySelector("#add-tool").addEventListener("click",addTool);addTool();document.querySelector("#back").addEventListener("click",()=>{if(current>0){current--;showStep()}});document.querySelector("#next").addEventListener("click",async()=>{if(!validateStep())return;if(current<steps.length-1){current++;showStep();return}const answers=collectAnswers();document.querySelector("#next").disabled=true;document.querySelector("#next").textContent="Checking answers…";try{const response=await fetch("/api/review/agent-launch/assess",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({answers})});const data=await response.json();if(!response.ok)throw new Error(data.detail||"Could not assess answers");renderResult(data);if(data.share_url)history.replaceState({}, "", data.share_url)}catch(e){errorBox.textContent=e.message||"Could not assess answers."}finally{document.querySelector("#next").disabled=false;document.querySelector("#next").textContent="Review answers"}});
+document.querySelector("#add-tool").addEventListener("click",addTool);addTool();document.querySelector("#back").addEventListener("click",()=>{if(current>0){current--;showStep()}});document.querySelector("#next").addEventListener("click",async()=>{if(!validateStep())return;trackReviewEvent("step_completed",{step:current+1});if(current<steps.length-1){current++;showStep();return}const answers=collectAnswers();document.querySelector("#next").disabled=true;document.querySelector("#next").textContent="Checking answers…";try{const response=await fetch("/api/review/agent-launch/assess",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({answers})});const data=await response.json();if(!response.ok)throw new Error(data.detail||"Could not assess answers");renderResult(data);if(data.share_url)history.replaceState({}, "", data.share_url)}catch(e){errorBox.textContent=e.message||"Could not assess answers."}finally{document.querySelector("#next").disabled=false;document.querySelector("#next").textContent="Review answers"}});
 </script>
 </body></html>
