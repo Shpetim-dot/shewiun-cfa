@@ -55,6 +55,7 @@ _RATE_LIMIT_PATHS = {
     "/api/auth/login": 5,
     "/api/runtime/runs": 10,
     "/api/council": 10,
+    "/api/agents/run": 15,
     "/api/review/agent-launch/assess": 10,
     "/api/review/agent-launch/unlock": 10,
     "/api/review/agent-launch/authorization-test-request": 5,
@@ -705,7 +706,11 @@ async def start_council(item: CouncilIn) -> dict[str, Any]:
             for role in roles:
                 agent = next((a for a in available if a["name"] == role), {"name": role, "role": role, "instructions": ""})
                 use_model = live and not agent.get("free")
-                reply = await model_reply(role, item.topic, context) if use_model else _free_agent_reply(agent, item.topic, brain_context)
+                if role == "Synthesizer" and not use_model:
+                    reply = ("Council synthesis\nTopic: " + item.topic + "\n\nPerspectives considered\n" + context +
+                             "\n\nDecision frame\nUse these perspectives as hypotheses, not verified facts. Choose one small next step, define an observable success measure, and save validated decisions to CFA Brain.")
+                else:
+                    reply = await model_reply(role, item.topic, context) if use_model else _free_agent_reply(agent, item.topic, brain_context)
                 if not reply:
                     raise ValueError(f"The configured agent returned no content for role {role}.")
                 transcript.append({"role": role, "content": reply})
