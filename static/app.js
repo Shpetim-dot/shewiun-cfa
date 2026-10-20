@@ -10,7 +10,7 @@ function activityMarkup(a){return `<div class="activity-row"><div class="activit
 function brainMarkup(b){return `<article class="brain-card"><div class="brain-card-head"><span class="kind-tag ${esc(b.kind.toLowerCase())}">${esc(b.kind)}</span><span class="confidence"><span class="confidence-track"><span style="width:${b.confidence}%"></span></span><b>${b.confidence}%</b></span></div><h3>${esc(b.title)}</h3><p>${esc(b.content)}</p><div class="brain-meta"><span>↳ ${esc(b.source)}</span><time>${date(b.created_at)}</time></div></article>`}
 function agentMarkup(a){const sym={Strategist:"↗",Skeptic:"⚑",Builder:"⌘",Synthesizer:"✳"};return `<article class="agent-card"><div class="agent-symbol ${esc(a.color)}">${sym[a.name]||"◎"}</div><h3>${esc(a.name)}</h3><p>${esc(a.role)}</p><div class="agent-provider">Provider · ${esc(a.provider)}</div><div class="agent-status"><span></span>${esc(a.status)}</div></article>`}
 function messageMarkup(m){const synthesis=m.role==="Synthesizer";return `<article class="message-card ${synthesis?"synthesis":""}"><div class="message-top"><span class="message-avatar">${m.role==="Strategist"?"↗":m.role==="Skeptic"?"⚑":m.role==="Builder"?"⌘":"✳"}</span><b>${esc(m.role)}${synthesis?" · Final synthesis":""}</b><small>${synthesis?"CONCLUSION":"PERSPECTIVE"}</small></div><p>${esc(m.content)}</p></article>`}
-async function refresh(){try{const [projects,brain,agents,councils,activity,health]=await Promise.all([api("/api/projects"),api("/api/brain"),api("/api/agents"),api("/api/council"),api("/api/activity"),api("/api/health")]);Object.assign(state,{projects,brain,agents,councils,activity});$("#api-status").textContent="API connected · v"+health.version;$("#mode-label").textContent=health.model_configured?"Model provider configured":"No model configured";$("#health-title").textContent=health.model_configured?"Model config present":"No model configured";$("#system-status").dataset.state=health.model_configured?"ready":"missing";$("#composer-status").textContent=(health.model_configured?"Model config present":"No model configured")+(health.storage_persistent?"":" · Vercel storage is ephemeral");render();await refreshApprovals();}catch(e){$("#api-status").textContent="API unavailable";$("#health-title").textContent="Runtime unavailable";$("#mode-label").textContent="Health check failed";$("#system-status").dataset.state="missing";$("#composer-status").textContent="Runtime unavailable · retry later";toast(e.message)}}
+async function refresh(){try{const [projects,brain,agents,councils,activity,health]=await Promise.all([api("/api/projects"),api("/api/brain"),api("/api/agents"),api("/api/council"),api("/api/activity"),api("/api/health")]);Object.assign(state,{projects,brain,agents,councils,activity});$("#api-status").textContent="API connected · v"+health.version;$("#mode-label").textContent=health.model_configured?"Model provider configured":"No model configured";document.documentElement.dataset.modelConfigured=health.model_configured?"true":"false";$("#health-title").textContent=health.model_configured?"Model config present":"No model configured";$("#system-status").dataset.state=health.model_configured?"ready":"missing";$("#composer-status").textContent=(health.model_configured?"Model config present":"No model configured")+(health.storage_persistent?"":" · Vercel storage is ephemeral");render();await refreshApprovals();}catch(e){$("#api-status").textContent="API unavailable";$("#health-title").textContent="Runtime unavailable";$("#mode-label").textContent="Health check failed";$("#system-status").dataset.state="missing";$("#composer-status").textContent="Runtime unavailable · retry later";toast(e.message)}}
 function render(){ $("#stat-projects").textContent=state.projects.length;$("#stat-brain").textContent=state.brain.length;$("#stat-agents").textContent=state.agents.length;$("#stat-councils").textContent=state.councils.length;$("#project-list").innerHTML=state.projects.slice(0,4).map(projectMarkup).join("")||'<div class="no-results">No projects yet.</div>';$("#control-project-list").innerHTML=state.projects.map(projectMarkup).join("")||'<div class="no-results">No projects yet.</div>';$("#activity-list").innerHTML=state.activity.slice(0,5).map(activityMarkup).join("")||'<div class="no-results">No activity yet.</div>';$("#security-activity").innerHTML=state.activity.map(activityMarkup).join("")||'<div class="no-results">No activity yet.</div>';$("#brain-count").textContent=state.brain.length+" ENTRIES";$("#brain-list").innerHTML=filteredBrain().map(brainMarkup).join("")||'<div class="no-results">No matching knowledge entries.</div>';$("#agent-grid").innerHTML=state.agents.map(agentMarkup).join("");$("#control-count").textContent=String(state.agents.length).padStart(2,"0");renderHistory();}
 function filteredBrain(){const q=$("#brain-search").value.toLowerCase(),kind=$("#brain-filter").value;return state.brain.filter(b=>(kind==="All"||b.kind===kind)&&[b.title,b.content,b.source].join(" ").toLowerCase().includes(q))}
 function renderHistory(){const host=$("#council-history");host.innerHTML=state.councils.map(c=>`<div class="history-row"><span class="round-icon">◎</span><div><b>${esc(c.topic)}</b><p>${esc(c.result)}</p></div><time>${date(c.created_at)}</time><button class="text-button" data-open-council="${esc(c.id)}">Open ↗</button></div>`).join("")||'<div class="no-results">No meetings yet. Start the first Council.</div>';$$("[data-open-council]").forEach(b=>b.addEventListener("click",()=>{const c=state.councils.find(x=>x.id===b.dataset.openCouncil);if(c)showCouncil(c)}));}
@@ -66,27 +66,19 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 function renderRuntimeProgress(topic, run) {
   const transcript = run?.state?.transcript || [];
   const status = run?.status || "queued";
-  const completed = transcript.length;
-  const total = run?.state?.roles?.length || 4;
   setMascotMode(["queued","running"].includes(status) ? "working" : "idle");
   workspaceResponse.hidden = false;
   workspaceResponse.innerHTML =
-    '<div class="workspace-response-head"><span class="response-agent-dot" aria-hidden="true"><i></i><i></i></span><b>CFA Council</b><small>' +
-    esc(status.toUpperCase()) + '</small></div>' +
+    '<div class="workspace-response-head"><b>CFA Council</b><small>State: ' + esc(status) + '</small></div>' +
     '<p class="workspace-user-prompt"></p>' +
-    '<div class="runtime-progress" role="status" aria-live="polite"><div class="runtime-progress-top"><span>' +
-    (status === "completed" ? "Recommendation ready" : status === "failed" ? "Run failed" : "Council is reviewing your task") +
-    '</span><b>' + completed + ' / ' + total + '</b></div><div class="runtime-progress-track"><span style="width:' +
-    Math.min(100, Math.round(completed / Math.max(total, 1) * 100)) + '%"></span></div></div>' +
-    transcript.map(message => '<article class="workspace-answer ' +
-      (message.role === "Synthesizer" ? "response-synthesis" : "") + '"><b>' +
-      esc(message.role) + (message.role === "Synthesizer" ? ' · Recommendation' : '') +
-      '</b><p>' + esc(message.content) + '</p></article>').join("") +
+    '<div class="runtime-status" role="status" aria-live="polite">' +
+    esc(status === "completed" ? "Decision ready" : status === "failed" ? "Run failed" : "Council is working on the task") +
+    '</div>' +
+    transcript.map((message,index) => '<details class="workspace-answer" ' + (["completed","failed","cancelled"].includes(status) ? "" : "open") + '><summary><b>' +
+      esc(message.role) + '</b></summary><p>' + esc(message.content) + '</p></details>').join("") +
     (status === "failed" ? '<p class="response-error"></p>' : "");
   workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
-  if (status === "failed") {
-    workspaceResponse.querySelector(".response-error").textContent = run.error || "The run failed. Retry with a narrower prompt.";
-  }
+  if (status === "failed") workspaceResponse.querySelector(".response-error").textContent = run.error || "The run failed. Retry after checking runtime configuration.";
 }
 workspaceForm?.addEventListener("submit", async event => {
   event.preventDefault();
@@ -94,6 +86,12 @@ workspaceForm?.addEventListener("submit", async event => {
   if (topic.length < 3) {
     toast("Add a little more detail before starting.");
     workspacePrompt.focus();
+    return;
+  }
+  if (document.documentElement.dataset.modelConfigured !== "true") {
+    workspaceResponse.hidden = false;
+    workspaceResponse.innerHTML = '<div class="no-model-banner"><b>No model configured</b><p>The Council will not fabricate a result. Configure CFA_MODEL_API_KEY and CFA_MODEL_NAME in the deployment environment, then retry.</p></div>';
+    workspaceResponse.scrollIntoView({behavior:"smooth",block:"nearest"});
     return;
   }
   const send = $("#workspace-send");
