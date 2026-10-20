@@ -69,3 +69,7 @@ CREATE TABLE IF NOT EXISTS review_analytics (
 );
 CREATE INDEX IF NOT EXISTS idx_review_submissions_created ON review_submissions(created_at);
 CREATE INDEX IF NOT EXISTS idx_review_analytics_created ON review_analytics(created_at);
+
+CREATE TABLE IF NOT EXISTS api_rate_limits (
+  bucket_key TEXT PRIMARY KEY, window_started_at DOUBLE PRECISION NOT NULL, count INTEGER NOT NULL
+);
