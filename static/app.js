@@ -117,65 +117,24 @@ function renderRuntimeProgress(topic, run) {
   workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
   if (status === "failed") workspaceResponse.querySelector(".response-error").textContent = run.error || "The run failed. Retry after checking runtime configuration.";
 }
-workspaceForm?.addEventListener("submit", async event => {
-  event.preventDefault();
-  const topic = workspacePrompt.value.trim();
-  if (topic.length < 3) {
-    toast("Add a little more detail before starting.");
-    workspacePrompt.focus();
-    return;
-  }
-  if (document.documentElement.dataset.modelConfigured !== "true") {
-    workspaceResponse.hidden = false;
-    workspaceResponse.innerHTML = '<div class="no-model-banner"><b>Enable the free-tier agent</b><p>Shewiun supports Google Gemini Flash. Add GEMINI_API_KEY as a server-side Vercel environment variable to enable model-backed Council runs. The key is never requested in this page or exposed to the browser.</p><p>Until configured, no model result will be fabricated.</p></div>';
-    workspaceResponse.scrollIntoView({behavior:"smooth",block:"nearest"});
-    return;
-  }
-  const send = $("#workspace-send");
-  send.disabled = true;
-  setMascotMode("working");
-  send.innerHTML = 'Working <span class="button-spinner" aria-hidden="true"></span>';
-  workspaceResponse.hidden = false;
-  workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="response-agent-dot is-animated" aria-hidden="true"><i></i><i></i></span><b>CFA Council</b><small>PREPARING</small></div><p class="workspace-user-prompt"></p><div class="workspace-answer"><p>Setting up the task and preparing the Council perspectives…</p></div>';
-  workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
-  workspaceResponse.scrollIntoView({behavior:"smooth",block:"nearest"});
-  try {
-    const created = await api("/api/runtime/runs", {
-      method: "POST",
-      body: JSON.stringify({topic, roles:["Strategist","Skeptic","Builder"], rounds:1})
-    });
-    let run = null;
-    const deadline = Date.now() + 120000;
-    while (Date.now() < deadline) {
-      run = await api("/api/runtime/runs/" + encodeURIComponent(created.id));
-      renderRuntimeProgress(topic, run);
-      if (["completed", "failed", "cancelled"].includes(run.status)) break;
-      await wait(900);
-    }
-    if (!run || !["completed", "failed", "cancelled"].includes(run.status)) {
-      workspaceResponse.innerHTML += '<p class="response-error">This task is still running. Check CFA Council for its status shortly.</p>';
-      toast("Task continues in the background");
-      return;
-    }
-    if (run.status === "completed") {
-      workspacePrompt.value = "";
-      setMascotMode("idle");
-      await refresh();
-      toast("Recommendation ready");
-    } else if (run.status === "cancelled") {
-      toast("Task cancelled");
-    } else {
-      toast("Task failed");
-    }
-  } catch (error) {
-    setMascotMode("idle");
-    workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="response-agent-dot" aria-hidden="true"><i></i><i></i></span><b>Could not start task</b></div><p class="response-error"></p>';
-    workspaceResponse.querySelector(".response-error").textContent = error.message || "Unexpected error. Try again.";
-  } finally {
-    send.disabled = false;
-    send.innerHTML = 'Start Council <span aria-hidden="true">→</span>';
-    if (!workspacePrompt.value.trim()) setMascotMode("idle");
-  }
+workspaceForm?.addEventListener("submit",async event=>{
+ event.preventDefault();const topic=workspacePrompt.value.trim();
+ if(topic.length<3){toast("Add a little more detail before starting.");workspacePrompt.focus();return;}
+ const send=$("#workspace-send"),agent=state.agents.find(a=>a.id===selectedAgentId)||state.agents.find(a=>a.id==="local-planner");
+ send.disabled=true;setMascotMode("working");send.textContent="Working…";
+ workspaceResponse.hidden=false;
+ workspaceResponse.innerHTML='<div class="workspace-response-head"><span class="response-agent-dot is-animated"><i></i><i></i></span><b>Preparing '+esc(agent?.name||"agent")+'</b><small>WORKING</small></div><p class="workspace-user-prompt"></p><div class="workspace-answer">Reviewing your task and relevant Brain notes…</div>';
+ workspaceResponse.querySelector(".workspace-user-prompt").textContent=topic;
+ try{
+  const result=await api("/api/agents/run",{method:"POST",body:JSON.stringify({topic,agent_id:agent?.id||"local-planner"})});
+  workspaceResponse.innerHTML='<div class="workspace-response-head"><span class="response-agent-dot"><i></i><i></i></span><b>'+esc(result.agent?.name||"CFA Agent")+'</b><small>'+esc(result.mode_label||"Free local rules")+'</small></div><p class="workspace-user-prompt"></p><div class="workspace-answer">'+esc(result.result)+'</div><div class="response-actions"><span class="response-mode"><span class="mode-dot"></span>'+esc(result.mode_label||"Free local rules")+'</span><button type="button" class="btn secondary" id="save-agent-result">Save to Brain</button></div>';
+  workspaceResponse.querySelector(".workspace-user-prompt").textContent=topic;
+  $("#save-agent-result").addEventListener("click",async()=>{const save=$("#save-agent-result");save.disabled=true;try{await api("/api/brain",{method:"POST",body:JSON.stringify({title:topic.slice(0,140),content:result.result,kind:"Decision",source:"Agent run · "+(result.agent?.name||"CFA Agent"),confidence:65})});await refresh();save.textContent="Saved to Brain";toast("Result saved to Brain");}catch(error){save.disabled=false;toast(error.message);}});
+  workspacePrompt.value="";setMascotMode("idle");await refresh();toast("Agent result ready");
+ }catch(error){
+  workspaceResponse.innerHTML='<div class="workspace-response-head"><span class="response-agent-dot"><i></i><i></i></span><b>Could not start task</b></div><p class="response-error"></p>';
+  workspaceResponse.querySelector(".response-error").textContent=error.message||"Unexpected error. Try again.";setMascotMode("idle");
+ }finally{send.disabled=false;send.innerHTML='Run selected agent <span aria-hidden="true">→</span>';if(!workspacePrompt.value.trim())setMascotMode("idle");}
 });
 workspacePrompt?.addEventListener("keydown", event => {
   if (event.key === "Enter" && !event.shiftKey) {
