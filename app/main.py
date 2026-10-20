@@ -115,17 +115,29 @@ async def security_and_access_middleware(request: Request, call_next):
         if rate_limit is not None:
             client_ip = request.client.host if request.client else "unknown"
             bucket_key = path + ":" + client_ip
-            hits = [stamp for stamp in _RATE_BUCKETS.get(bucket_key, []) if now_mono - stamp < 60]
-            if len(hits) >= rate_limit:
-                response = JSONResponse(status_code=429, content={"detail": "Rate limit reached. Wait one minute and retry."},
-                                         headers={"Retry-After": "60"})
-                return _apply_security_headers(response)
-            hits.append(now_mono)
-            _RATE_BUCKETS[bucket_key] = hits
-            if len(_RATE_BUCKETS) > 2000:
-                for key in list(_RATE_BUCKETS)[:500]:
-                    if not _RATE_BUCKETS[key] or now_mono - _RATE_BUCKETS[key][-1] >= 60:
-                        _RATE_BUCKETS.pop(key, None)
+            if database_backend() == "postgresql":
+                try:
+                    allowed = _consume_distributed_rate_limit(bucket_key, rate_limit)
+                except DATABASE_ERRORS:
+                    return _apply_security_headers(JSONResponse(status_code=503, content={
+                        "detail": "Shared rate-limit storage is unavailable; request rejected."
+                    }))
+                if not allowed:
+                    return _apply_security_headers(JSONResponse(status_code=429, content={
+                        "detail": "Rate limit reached. Wait one minute and retry."
+                    }, headers={"Retry-After": "60"}))
+            else:
+                hits = [stamp for stamp in _RATE_BUCKETS.get(bucket_key, []) if now_mono - stamp < 60]
+                if len(hits) >= rate_limit:
+                    response = JSONResponse(status_code=429, content={"detail": "Rate limit reached. Wait one minute and retry."},
+                                             headers={"Retry-After": "60"})
+                    return _apply_security_headers(response)
+                hits.append(now_mono)
+                _RATE_BUCKETS[bucket_key] = hits
+                if len(_RATE_BUCKETS) > 2000:
+                    for key in list(_RATE_BUCKETS)[:500]:
+                        if not _RATE_BUCKETS[key] or now_mono - _RATE_BUCKETS[key][-1] >= 60:
+                            _RATE_BUCKETS.pop(key, None)
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -177,6 +189,27 @@ def connect():
     return connect_db(None if database_url() else DB_PATH)
 
 
+def _consume_distributed_rate_limit(bucket_key: str, limit: int) -> bool:
+    current = time.time()
+    with connect() as db:
+        row = db.execute(
+            """INSERT INTO api_rate_limits (bucket_key, window_started_at, count)
+               VALUES (?, ?, 1)
+               ON CONFLICT(bucket_key) DO UPDATE SET
+                 count = CASE
+                   WHEN excluded.window_started_at - api_rate_limits.window_started_at >= 60 THEN 1
+                   ELSE api_rate_limits.count + 1
+                 END,
+                 window_started_at = CASE
+                   WHEN excluded.window_started_at - api_rate_limits.window_started_at >= 60
+                   THEN excluded.window_started_at ELSE api_rate_limits.window_started_at
+                 END
+               RETURNING count""",
+            (bucket_key, current),
+        ).fetchone()
+    return bool(row and row[0] <= limit)
+
+
 def init_db() -> None:
     with connect() as db:
         schema = """
@@ -213,6 +246,9 @@ def init_db() -> None:
           started_at TEXT, finished_at TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_runtime_runs_status_created ON runtime_runs(status, created_at);
+        CREATE TABLE IF NOT EXISTS api_rate_limits (
+          bucket_key TEXT PRIMARY KEY, window_started_at DOUBLE PRECISION NOT NULL, count INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS runtime_events (
           seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, event_type TEXT NOT NULL,
           payload_json TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -378,13 +414,13 @@ def health() -> dict[str, Any]:
         "database": database_backend(),
         "storage_persistent": database_backend() == "postgresql" or not IS_VERCEL,
         "database_backend": "sqlite",
-        "distributed_rate_limits": False,
+        "distributed_rate_limits": database_backend() == "postgresql",
         "durable_queue": False,
         "production_ready": False,
         "readiness_blockers": [
             *(["workspace authentication secrets are not configured"] if auth_required() and not auth_configured() else []),
             *(["persistent PostgreSQL storage is not configured"] if database_backend() != "postgresql" else []),
-            "rate limiting is process-local, not distributed",
+            *(["rate limiting is process-local, not distributed"] if database_backend() != "postgresql" else []),
             "background orchestration queue is process-local",
             *(["model provider key is not configured"] if not model_provider_configured() else []),
         ],
