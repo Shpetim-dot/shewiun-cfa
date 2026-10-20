@@ -16,6 +16,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .agent_launch_rules import evaluate_agent_launch
+
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -628,3 +630,25 @@ def cancel_runtime_run(run_id: str) -> dict[str, Any]:
         db.execute("UPDATE runtime_runs SET cancel_requested=1,updated_at=? WHERE id=?", (now(), run_id))
     _runtime_event(run_id, "run.cancel_requested", {})
     return {"id": run_id, "status": "cancellation_requested"}
+
+
+
+# --- Public Agent Launch Review: deterministic Phase 1 assessment ---
+
+class AgentLaunchAssessmentIn(BaseModel):
+    answers: dict[str, Any] = Field()
+
+
+@app.get("/review/agent-launch")
+def agent_launch_review_page() -> FileResponse:
+    return FileResponse(STATIC / "agent-launch.html")
+
+
+@app.post("/api/review/agent-launch/assess")
+def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
+    # This endpoint intentionally performs deterministic checks only. No model
+    # calls, persistence, or claims of testing/audit/certification in Phase 1.
+    encoded = json.dumps(item.answers, ensure_ascii=False)
+    if len(encoded) > 20000:
+        raise HTTPException(status_code=413, detail="Answers exceed the 20 KB limit.")
+    return evaluate_agent_launch(item.answers)
