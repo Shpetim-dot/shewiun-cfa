@@ -201,7 +201,10 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "app": "Shewiun CFA",
         "version": "0.2.0",
-        "model_configured": bool(os.getenv("CFA_MODEL_API_KEY")),
+        "model_configured": bool(os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME")),
+        "database": "sqlite",
+        "storage_persistent": not IS_VERCEL,
+        "queue": "in_process",
         "storage": "ephemeral_sqlite" if IS_VERCEL else "sqlite",
         "storage_warning": (
             "Vercel /tmp storage is ephemeral; data may be lost between instances or deployments."
@@ -252,7 +255,7 @@ AGENTS = [
 
 @app.get("/api/agents")
 def list_agents() -> list[dict[str, str]]:
-    live = bool(os.getenv("CFA_MODEL_API_KEY"))
+    live = bool(os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME"))
     return [{**a, "provider": os.getenv("CFA_MODEL_NAME", "Configured model") if live else "Local demo",
              "status": "Connected" if live else "Demo mode"} for a in AGENTS]
 
@@ -299,13 +302,15 @@ async def start_council(item: CouncilIn) -> dict[str, Any]:
         roles.append("Synthesizer")
     transcript: list[dict[str, str]] = []
     context = ""
-    live = bool(os.getenv("CFA_MODEL_API_KEY"))
+    live = bool(os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME"))
+    if not live:
+        raise HTTPException(status_code=503, detail="No model configured. Set CFA_MODEL_API_KEY and CFA_MODEL_NAME in the deployment environment before running the Council.")
     try:
         for _ in range(item.rounds):
             for role in roles:
-                reply = await model_reply(role, item.topic, context) if live else None
-                if reply is None:
-                    reply = demo_reply(role, item.topic, context)
+                reply = await model_reply(role, item.topic, context)
+                if not reply:
+                    raise ValueError(f"The configured model returned no content for role {role}.")
                 transcript.append({"role": role, "content": reply})
                 context += f"\n{role}: {reply}"
     except (httpx.HTTPError, KeyError, ValueError) as exc:
@@ -506,9 +511,11 @@ async def _execute_runtime_run(run_id: str) -> None:
                 return
             role = roles[state["next_index"]]
             context = "\n".join(f"{m['role']}: {m['content']}" for m in transcript)
-            reply = await model_reply(role, request["topic"], context) if live else None
-            if reply is None:
-                reply = demo_reply(role, request["topic"], context)
+            if not live:
+                raise RuntimeError("No model configured. Set CFA_MODEL_API_KEY and CFA_MODEL_NAME before running the Council.")
+            reply = await model_reply(role, request["topic"], context)
+            if not reply:
+                raise RuntimeError(f"The configured model returned no content for role {role}.")
             transcript.append({"role": role, "content": reply, "step": state["next_index"]})
             state["next_index"] += 1
             state["transcript"] = transcript
@@ -571,6 +578,8 @@ class RuntimeCouncilIn(BaseModel):
 
 @app.post("/api/runtime/runs", status_code=202)
 def create_runtime_run(item: RuntimeCouncilIn) -> dict[str, Any]:
+    if not (os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME")):
+        raise HTTPException(status_code=503, detail="No model configured. Set CFA_MODEL_API_KEY and CFA_MODEL_NAME in the deployment environment before running the Council.")
     roles = [role for role in item.roles if role in {"Strategist", "Skeptic", "Builder"}]
     if not roles:
         roles = ["Strategist", "Skeptic", "Builder"]
@@ -667,7 +676,7 @@ async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
     if len(encoded) > 20000:
         raise HTTPException(status_code=413, detail="Answers exceed the 20 KB limit.")
     try:
-        result = await create_review(DB_PATH, item.answers)
+        result = await create_review(DB_PATH, item.answers, allow_share=not IS_VERCEL)
     except sqlite3.Error:
         raise HTTPException(status_code=503, detail="Review storage is unavailable. Please try again later.")
     if not result["model_configured"]:
