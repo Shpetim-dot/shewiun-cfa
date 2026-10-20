@@ -380,7 +380,7 @@ async def start_council(item: CouncilIn) -> dict[str, Any]:
         roles.append("Synthesizer")
     transcript: list[dict[str, str]] = []
     context = ""
-    live = bool(os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME"))
+    live = model_provider_configured()
     if not live:
         raise HTTPException(status_code=503, detail="No model configured. Add GEMINI_API_KEY for the Gemini Flash integration, or set CFA_MODEL_API_KEY and CFA_MODEL_NAME.")
     try:
@@ -657,7 +657,7 @@ class RuntimeCouncilIn(BaseModel):
 @app.post("/api/runtime/runs", status_code=202)
 def create_runtime_run(item: RuntimeCouncilIn) -> dict[str, Any]:
     if not model_provider_configured():
-        raise HTTPException(status_code=503, detail="No model configured. Set CFA_MODEL_API_KEY and CFA_MODEL_NAME in the deployment environment before running the Council.")
+        raise HTTPException(status_code=503, detail="No model configured. Add GEMINI_API_KEY for Gemini Flash or configure CFA_MODEL_API_KEY and CFA_MODEL_NAME.")
     roles = [role for role in item.roles if role in {"Strategist", "Skeptic", "Builder"}]
     if not roles:
         roles = ["Strategist", "Skeptic", "Builder"]
