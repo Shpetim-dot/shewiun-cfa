@@ -195,3 +195,88 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .workspace-response .response-synthesis{border-color:#cad8f1;background:linear-gradient(130deg,#f8faff,#fff)}
 .response-error{padding:11px 13px;border:1px solid #f0d1d1;border-radius:10px;background:#fff8f8;color:#9e4242;font-size:12px;line-height:1.6}
 @media(max-width:760px){.runtime-progress{padding:11px}.workspace-response .workspace-answer{padding:12px}}
+
+
+/* Simple workspace UI: clear hierarchy, neutral surfaces, no decorative AI artwork */
+:root{--navy:#f7f7f8;--navy2:#f0f0f2;--ink:#202123;--muted:#6b6b70;--cream:#fff;--paper:#fff;--line:#e5e5e7;--blue:#e9e9eb;--blue-dark:#343438;--mint:#ececee;--violet:#eeeef0;--gold:#f0f0f1;--shadow:none}
+body{background:#fff;color:#202123;font-size:14px;font-family:Arial,Helvetica,sans-serif}
+.sidebar{background:#f7f7f8;color:#202123;border-right:1px solid #e8e8ea;padding:20px 12px}
+.brand{color:#202123;padding:0 9px 28px}
+.brand-mark{width:30px;height:30px;border-radius:8px;border:1px solid #d7d7da;background:#fff;color:#202123;font-size:17px}
+.brand b{font:700 13px Arial,sans-serif;letter-spacing:1.3px}
+.brand small{color:#77777d;letter-spacing:.6px;font-size:9px}
+.workspace-label{color:#77777d;font-size:10px;letter-spacing:.7px}
+.nav-item{color:#4a4a4f;border-radius:8px;padding:10px 11px;font-size:13px;gap:10px}
+.nav-item>span{font-size:16px}
+.nav-item:hover{background:#ebebed;color:#202123}
+.nav-item.active{background:#e8e8ea;color:#202123;font-weight:600}
+.system-card{background:#fff;border:1px solid #e5e5e7;border-radius:8px}
+.system-card b,.user-row b{color:#333338}
+.system-card small,.user-row small{color:#77777d}
+.avatar{background:#e6e6e8;color:#333338}
+.main{background:#fff}
+.topbar{height:54px;background:#fff;border-bottom:1px solid #ededee;padding:0 32px;backdrop-filter:none}
+.breadcrumbs{color:#77777d}.breadcrumbs span{color:#c5c5c8}.breadcrumbs b{color:#343438}
+.icon-button{background:#fff;border-color:#e5e5e7;border-radius:8px}
+.content{max-width:1240px;padding:34px 42px 24px}
+.workspace-intro{padding:8px 0 25px}
+.workspace-intro .eyebrow{color:#77777d;letter-spacing:.7px;font-size:10px}
+.workspace-intro h1{font-size:28px;line-height:1.2;letter-spacing:-.8px;font-weight:600;margin:10px 0 6px;color:#202123}
+.workspace-intro p{margin:0;color:#6b6b70;font-size:14px;line-height:1.5}
+.workspace-composer{padding:18px;border:1px solid #d9d9dc;border-radius:14px;box-shadow:0 2px 8px #00000008}
+.composer-heading{margin-bottom:14px}
+.composer-heading h2{font:600 16px/1.35 Arial,Helvetica,sans-serif;letter-spacing:-.2px;margin:0;color:#202123}
+.composer-heading p{font-size:13px;color:#6b6b70;margin:5px 0 0}
+#workspace-prompt{width:100%;min-height:100px;resize:vertical;border:0;outline:0;background:#fff;padding:12px 2px;color:#202123;font:14px/1.6 Arial,Helvetica,sans-serif}
+#workspace-prompt::placeholder{color:#929297}
+#workspace-prompt:focus{box-shadow:none}
+.composer-footer{border-top:1px solid #ededee;padding-top:12px;margin-top:5px;gap:12px}
+.composer-footer>span{font-size:11px;color:#77777d}
+.composer-status{background:#9a9a9f}
+.btn{border-radius:8px;padding:10px 13px;font-size:12px;transition:none}
+.btn:hover{filter:none;transform:none}
+.btn.primary{background:#202123;color:#fff}
+.btn.primary:hover{background:#38383b}
+.btn.secondary,.view:not(#view-overview) .btn.secondary,.modal .btn.secondary{background:#fff;border:1px solid #dedee1;color:#343438}
+.section-heading{margin:30px 0 14px}
+.section-heading h2{font:600 18px Arial,Helvetica,sans-serif;letter-spacing:-.3px;color:#202123}
+.eyebrow{letter-spacing:.7px}
+.stat-grid{gap:12px}
+.stat-card,.panel,.brain-card,.agent-card{border:1px solid #e5e5e7;border-radius:10px;box-shadow:none;background:#fff}
+.stat-card{padding:15px}
+.stat-icon{background:#f0f0f2!important;color:#5c5c62!important;border-radius:8px}
+.stat-card strong{font-size:24px;font-weight:600;letter-spacing:-.6px}
+.stat-top{color:#626268}
+.stat-card>small,.subtle{color:#77777d}
+.two-col{gap:12px}
+.panel{padding:17px}
+.panel-heading h3{font:600 14px Arial,Helvetica,sans-serif;color:#202123}
+.panel-heading p{font-size:12px;color:#77777d}
+.project-row,.activity-row,.history-row{border-color:#ededee}
+.project-symbol,.activity-mark,.round-icon,.message-avatar{background:#f0f0f2;color:#55555b}
+.badge{background:#efefef;color:#55555b}
+.add-row{border:1px solid #e5e5e7;border-radius:8px;color:#55555b}
+.footer{border-color:#ededee}
+.page-title h1{font:600 28px/1.2 Arial,Helvetica,sans-serif;letter-spacing:-.8px;color:#202123}
+.page-title h1 span{color:#77777d}
+.page-title p{font-size:13px;color:#6b6b70}
+.council-form textarea,.modal textarea,.modal input:not([type=range]),.council-form input,.filter-row select,.form-two select,.searchbox{background:#fff;border-color:#dedee1;border-radius:8px;color:#202123}
+.role-option{border-color:#e5e5e7}
+.role-avatar{background:#f0f0f2!important;color:#55555b!important}
+.message-card,.message-card.synthesis{background:#fff;border-color:#e5e5e7}
+.message-card p{font-size:13px;color:#444449}
+.message-card.synthesis{border-left:3px solid #77777d}
+.brain-banner,.security-banner,.control-banner{background:#f7f7f8;border:1px solid #e5e5e7;color:#202123;border-radius:10px}
+.brain-banner p,.security-banner p,.control-banner p{color:#6b6b70}
+.banner-icon,.security-shield{background:#ededf0;color:#55555b}
+.control-count{border-color:#dedee1}
+.control-count small{color:#6b6b70}
+.kind-tag,.kind-tag.decision,.kind-tag.rule,.kind-tag.hypothesis{background:#f0f0f2;color:#55555b}
+.confidence-track span{background:#77777d}
+.security-card,.modal{border-color:#e5e5e7}
+.modal{border-radius:12px}
+.modal::backdrop{background:#20212355;backdrop-filter:none}
+.toast{background:#202123;color:#fff;border-radius:8px}
+@media(min-width:1500px){.content{padding-top:38px}.workspace-intro h1{font-size:30px}}
+@media(max-width:1120px){.content{padding:24px}}
+@media(max-width:760px){.content{padding:20px 14px}.topbar{padding:0 14px}.workspace-intro{padding-top:2px}.stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
