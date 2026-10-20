@@ -913,7 +913,7 @@ async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
     if len(encoded) > 20000:
         raise HTTPException(status_code=413, detail="Answers exceed the 20 KB limit.")
     try:
-        result = await create_review(None if database_url() else DB_PATH, item.answers, allow_share=True)
+        result = await create_review(None if database_url() else DB_PATH, item.answers, allow_share=(database_backend() == "postgresql" or not IS_VERCEL))
     except DATABASE_ERRORS:
         raise HTTPException(status_code=503, detail="Review storage is unavailable. Please try again later.")
     if not result["model_configured"]:
