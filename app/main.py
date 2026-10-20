@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -41,6 +41,27 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Shewiun CFA", version="0.2.0", description="Control & Focus Architecture")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
+    return response
+
+
+def model_provider_configured() -> bool:
+    return bool(os.getenv("GEMINI_API_KEY") or (os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME")))
+
+
+def configured_model_name() -> str | None:
+    if os.getenv("GEMINI_API_KEY"):
+        return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    return os.getenv("CFA_MODEL_NAME") if os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME") else None
 
 
 def now() -> str:
@@ -201,7 +222,11 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "app": "Shewiun CFA",
         "version": "0.2.0",
-        "model_configured": bool(os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME")),
+        "model_configured": model_provider_configured(),
+        "model_provider": "Google Gemini API" if os.getenv("GEMINI_API_KEY") else ("OpenAI-compatible" if os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME") else None),
+        "model_name": configured_model_name(),
+        "free_agent_available": True,
+        "free_agent_name": "Gemini Flash (API key required; free-tier availability depends on Google account and current limits)",
         "database": "sqlite",
         "storage_persistent": not IS_VERCEL,
         "queue": "in_process",
@@ -255,32 +280,49 @@ AGENTS = [
 
 @app.get("/api/agents")
 def list_agents() -> list[dict[str, str]]:
-    live = bool(os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME"))
+    live = model_provider_configured()
     return [{**a, "provider": os.getenv("CFA_MODEL_NAME", "Configured model") if live else "Local demo",
              "status": "Connected" if live else "Demo mode"} for a in AGENTS]
 
 
 async def model_reply(role: str, topic: str, context: str) -> str | None:
-    key = os.getenv("CFA_MODEL_API_KEY")
-    if not key:
-        return None
-    base = os.getenv("CFA_MODEL_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    model = os.getenv("CFA_MODEL_NAME", "gpt-4o-mini")
     system = {
         "Strategist": "You are the Strategist in a multi-agent product council. Identify the opportunity, desired outcome, and priorities. Be concise.",
         "Skeptic": "You are the Skeptic in a multi-agent product council. Challenge assumptions, identify risks, and suggest mitigations. Be constructive.",
         "Builder": "You are the Builder in a multi-agent product council. Turn the discussion into practical steps, dependencies, and an MVP scope.",
         "Synthesizer": "You are the Council Synthesizer. Resolve disagreement, state the strongest shared conclusion, open questions, and next actions."
     }.get(role, f"You are the {role} in a product council. Be concise and specific.")
+    prompt = f"Topic: {topic}\\n\\nContext from previous speakers:\\n{context or '(first speaker)'}"
     async with httpx.AsyncClient(timeout=45) as client:
+        if os.getenv("GEMINI_API_KEY"):
+            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+            response = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                params={"key": os.getenv("GEMINI_API_KEY")},
+                json={"systemInstruction": {"parts": [{"text": system}]},
+                      "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                      "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1200}},
+            )
+            response.raise_for_status()
+            parts = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            answer = "\\n".join(p.get("text", "") for p in parts if p.get("text"))
+            if not answer.strip():
+                raise RuntimeError("Gemini returned no text content.")
+            return answer.strip()
+        key = os.getenv("CFA_MODEL_API_KEY")
+        model = os.getenv("CFA_MODEL_NAME")
+        if not key or not model:
+            return None
+        base = os.getenv("CFA_MODEL_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         response = await client.post(f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {key}"},
             json={"model": model, "messages": [{"role": "system", "content": system},
-                  {"role": "user", "content": f"Topic: {topic}\n\nContext from previous speakers:\n{context or '(first speaker)'}"}],
-                  "temperature": 0.5})
+                  {"role": "user", "content": prompt}], "temperature": 0.4, "max_tokens": 1200})
         response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
+        answer = response.json()["choices"][0]["message"]["content"]
+        if not answer or not answer.strip():
+            raise RuntimeError("Configured model returned no text content.")
+        return answer.strip()
 
 
 def demo_reply(role: str, topic: str, context: str) -> str:
@@ -304,7 +346,7 @@ async def start_council(item: CouncilIn) -> dict[str, Any]:
     context = ""
     live = bool(os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME"))
     if not live:
-        raise HTTPException(status_code=503, detail="No model configured. Set CFA_MODEL_API_KEY and CFA_MODEL_NAME in the deployment environment before running the Council.")
+        raise HTTPException(status_code=503, detail="No model configured. Add GEMINI_API_KEY for the Gemini Flash integration, or set CFA_MODEL_API_KEY and CFA_MODEL_NAME.")
     try:
         for _ in range(item.rounds):
             for role in roles:
@@ -512,7 +554,7 @@ async def _execute_runtime_run(run_id: str) -> None:
             role = roles[state["next_index"]]
             context = "\n".join(f"{m['role']}: {m['content']}" for m in transcript)
             if not live:
-                raise RuntimeError("No model configured. Set CFA_MODEL_API_KEY and CFA_MODEL_NAME before running the Council.")
+                raise RuntimeError("No model configured. Add GEMINI_API_KEY for Gemini Flash or configure CFA_MODEL_API_KEY and CFA_MODEL_NAME.")
             reply = await model_reply(role, request["topic"], context)
             if not reply:
                 raise RuntimeError(f"The configured model returned no content for role {role}.")
@@ -578,7 +620,7 @@ class RuntimeCouncilIn(BaseModel):
 
 @app.post("/api/runtime/runs", status_code=202)
 def create_runtime_run(item: RuntimeCouncilIn) -> dict[str, Any]:
-    if not (os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME")):
+    if not model_provider_configured():
         raise HTTPException(status_code=503, detail="No model configured. Set CFA_MODEL_API_KEY and CFA_MODEL_NAME in the deployment environment before running the Council.")
     roles = [role for role in item.roles if role in {"Strategist", "Skeptic", "Builder"}]
     if not roles:
