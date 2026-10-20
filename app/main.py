@@ -417,6 +417,15 @@ def auth_logout():
 
 
 @app.get("/api/health")
+def database_connection_ok() -> bool:
+    try:
+        with connect() as db:
+            db.execute("SELECT 1").fetchone()
+        return True
+    except DATABASE_ERRORS:
+        return False
+
+
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
@@ -431,6 +440,7 @@ def health() -> dict[str, Any]:
         "free_agent_available": True,
         "free_agent_name": "Gemini Flash (API key required; free-tier availability depends on Google account and current limits)",
         "database": database_backend(),
+        "database_connection_ok": database_connection_ok(),
         "storage_persistent": database_backend() == "postgresql" or not IS_VERCEL,
         "database_backend": database_backend(),
         "distributed_rate_limits": database_backend() == "postgresql",
@@ -441,6 +451,7 @@ def health() -> dict[str, Any]:
         "readiness_blockers": [
             *(["workspace authentication secrets are not configured"] if auth_required() and not auth_configured() else []),
             *(["persistent PostgreSQL storage is not configured"] if database_backend() != "postgresql" else []),
+            *(["configured PostgreSQL connection is unavailable"] if database_backend() == "postgresql" and not database_connection_ok() else []),
             *(["rate limiting is process-local, not distributed"] if database_backend() != "postgresql" else []),
             "background orchestration queue is process-local",
             *(["model provider key is not configured"] if not model_provider_configured() else []),
