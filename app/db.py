@@ -9,8 +9,10 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import class_row
+from psycopg_pool import ConnectionPool
 
 DATABASE_ERRORS = (sqlite3.Error, psycopg.Error)
+_POOLS: dict[str, ConnectionPool] = {}
 
 
 def database_url() -> str | None:
@@ -33,8 +35,9 @@ class CompatRow(dict):
 class PostgresConnection:
     """Small adapter for the existing SQLite-shaped query layer."""
 
-    def __init__(self, connection: psycopg.Connection):
+    def __init__(self, connection: psycopg.Connection, pool: ConnectionPool | None = None):
         self._connection = connection
+        self._pool = pool
 
     def execute(self, query: str, params: Any = None):
         if params is None:
@@ -58,23 +61,38 @@ class PostgresConnection:
         try:
             return self._connection.__exit__(exc_type, exc, traceback)
         finally:
-            self._connection.close()
+            if self._pool:
+                self._pool.putconn(self._connection)
+            else:
+                self._connection.close()
 
     def close(self) -> None:
-        self._connection.close()
+        if self._pool:
+            self._pool.putconn(self._connection)
+        else:
+            self._connection.close()
 
 
 def connect_db(path: Path | str | None = None):
     """Connect to PostgreSQL when configured; explicit paths always select SQLite."""
     url = database_url() if path is None else None
     if url:
-        connection = psycopg.connect(
-            url,
-            connect_timeout=10,
-            application_name="shewiun-cfa",
-            row_factory=class_row(CompatRow),
-        )
-        return PostgresConnection(connection)
+        pool = _POOLS.get(url)
+        if pool is None:
+            pool = ConnectionPool(
+                conninfo=url,
+                min_size=0,
+                max_size=4,
+                timeout=10,
+                kwargs={
+                    "connect_timeout": 10,
+                    "application_name": "shewiun-cfa",
+                    "row_factory": class_row(CompatRow),
+                },
+            )
+            _POOLS[url] = pool
+        connection = pool.getconn(timeout=10)
+        return PostgresConnection(connection, pool)
 
     if path is None:
         path = os.getenv("CFA_DATABASE_PATH", "./data/cfa.db")
