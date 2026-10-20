@@ -58,6 +58,7 @@ class ReviewEventIn(BaseModel):
     event_name: str = Field(min_length=1, max_length=40)
     share_token: str | None = Field(default=None, min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$")
     metadata: dict[str, Any] = Field(default_factory=dict)
+    analytics_consent: bool = False
 
 
 class ReviewLeadUnlockIn(BaseModel):
@@ -81,9 +82,11 @@ def record_agent_launch_event(item: ReviewEventIn) -> dict[str, Any]:
     allowed = {"page_view", "step_completed", "result_viewed", "pdf_downloaded", "cta_clicked"}
     if item.event_name not in allowed:
         raise HTTPException(status_code=400, detail="Unsupported analytics event.")
+    if not item.analytics_consent:
+        return {"status": "ignored", "reason": "analytics consent not granted"}
     if len(str(item.metadata).encode("utf-8")) > 2048:
         raise HTTPException(status_code=413, detail="Analytics metadata exceeds 2 KB.")
-    if _main().IS_VERCEL and _main().database_backend() != "postgresql":
+    if _main().IS_VERCEL and (_main().database_backend() != "postgresql" or privacy_notice_url() is None):
         raise HTTPException(status_code=503, detail="Analytics storage requires persistent PostgreSQL.")
     submission_id = None
     if item.share_token:
