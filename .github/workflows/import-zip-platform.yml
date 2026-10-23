@@ -4,7 +4,7 @@ on:
   push:
     branches: [import-zip-platform]
     paths:
-      - ".github/import-payload/platform.zip.b64"
+      - ".github/import-payload/platform.zip.b64.part*"
 
 permissions:
   contents: write
@@ -28,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/shewiun-import/unpacked
-          base64 --decode .github/import-payload/platform.zip.b64 > /tmp/shewiun-import/platform.zip
+          cat .github/import-payload/platform.zip.b64.part* | base64 --decode > /tmp/shewiun-import/platform.zip
           unzip -q /tmp/shewiun-import/platform.zip -d /tmp/shewiun-import/unpacked
           test -f /tmp/shewiun-import/unpacked/shewiun-cfa/app/main.py
           test -f /tmp/shewiun-import/unpacked/shewiun-cfa/static/app.js
