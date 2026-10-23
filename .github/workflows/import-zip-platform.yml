@@ -1,0 +1,71 @@
+name: Import the supplied Shewiun CFA platform baseline
+
+on:
+  push:
+    branches: [import-zip-platform]
+    paths:
+      - ".github/import-payload/platform.zip.b64"
+
+permissions:
+  contents: write
+
+jobs:
+  replace-baseline:
+    if: github.ref == 'refs/heads/import-zip-platform'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Decode and extract uploaded platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/shewiun-import/unpacked
+          base64 --decode .github/import-payload/platform.zip.b64 > /tmp/shewiun-import/platform.zip
+          unzip -q /tmp/shewiun-import/platform.zip -d /tmp/shewiun-import/unpacked
+          test -f /tmp/shewiun-import/unpacked/shewiun-cfa/app/main.py
+          test -f /tmp/shewiun-import/unpacked/shewiun-cfa/static/app.js
+          test -f /tmp/shewiun-import/unpacked/shewiun-cfa/tests/test_runtime_api.py
+      - name: Install and test the incoming baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/shewiun-import/unpacked/shewiun-cfa
+          python -m pip install -r requirements-dev.txt
+          python -m compileall -q app
+          pytest -q
+      - name: Replace repository root with the tested archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout -B main origin/main
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          root = Path.cwd()
+          source = Path("/tmp/shewiun-import/unpacked/shewiun-cfa")
+          if not (source / "app/main.py").is_file():
+              raise SystemExit("The imported archive is missing app/main.py")
+          for item in root.iterdir():
+              if item.name == ".git":
+                  continue
+              if item.is_dir():
+                  shutil.rmtree(item)
+              else:
+                  item.unlink()
+          shutil.copytree(source, root, dirs_exist_ok=True)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Replace Shewiun CFA baseline with uploaded platform ZIP"
+          git push origin HEAD:main
