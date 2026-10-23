@@ -27,4 +27,4 @@ jobs:
       - name: Compile backend
         run: python -m compileall -q app
       - name: Run API and runtime tests
-        run: PYTHONPATH=. pytest -q
+        run: pytest -q
