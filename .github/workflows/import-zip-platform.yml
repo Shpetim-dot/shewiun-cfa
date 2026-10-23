@@ -4,7 +4,7 @@ on:
   push:
     branches: [import-zip-platform]
     paths:
-      - ".github/import-payload/platform.zip.b64.part*"
+      - ".github/import-payload/IMPORT_READY"
 
 permissions:
   contents: write
