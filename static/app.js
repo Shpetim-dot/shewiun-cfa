@@ -1,191 +1,196 @@
-const $ = (s) => document.querySelector(s);
-const $$ = (s) => [...document.querySelectorAll(s)];
-const state = { projects: [], brain: [], agents: [], councils: [], activity: [] };
-const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const date = v => { try { return new Intl.DateTimeFormat(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}).format(new Date(v)); } catch { return ""; } };
-const toast = (msg) => { const el=$("#toast"); el.textContent=msg; el.classList.add("show"); setTimeout(()=>el.classList.remove("show"),2600); };
-async function api(path, options={}) { const r=await fetch(path,{headers:{"Content-Type":"application/json",...(options.headers||{})},...options}); if(!r.ok){let message="Request failed";try{message=(await r.json()).detail||message}catch{}throw new Error(message)} return r.json(); }
-function projectMarkup(p){return `<div class="project-row"><div class="project-symbol">▦</div><div class="project-copy"><b>${esc(p.name)}</b><small>${esc(p.description||"No description yet")}</small></div><span class="badge">${esc(p.status)}</span></div>`}
-function activityMarkup(a){return `<div class="activity-row"><div class="activity-mark" aria-hidden="true">•</div><div class="activity-copy"><b>${esc(a.action)}</b><p>${esc(a.detail)}</p><time>${date(a.created_at)}</time></div></div>`}
-function brainMarkup(b){return `<article class="brain-card"><div class="brain-card-head"><span class="kind-tag ${esc(b.kind.toLowerCase())}">${esc(b.kind)}</span><span class="confidence"><span class="confidence-track"><span style="width:${b.confidence}%"></span></span><b>${b.confidence}%</b></span></div><h3>${esc(b.title)}</h3><p>${esc(b.content)}</p><div class="brain-meta"><span>↳ ${esc(b.source)}</span><time>${date(b.created_at)}</time></div></article>`}
-function agentMarkup(a){const sym={Strategist:"S",Skeptic:"R",Builder:"B",Synthesizer:"C"};return `<article class="agent-card"><div class="agent-symbol ${esc(a.color)}">${sym[a.name]||"◎"}</div><h3>${esc(a.name)}</h3><p>${esc(a.role)}</p><div class="agent-provider">Provider · ${esc(a.provider)}</div><div class="agent-status"><span></span>${esc(a.status)}</div></article>`}
-function messageMarkup(m){const synthesis=m.role==="Synthesizer";return `<article class="message-card ${synthesis?"synthesis":""}"><div class="message-top"><span class="message-avatar">${m.role==="Strategist"?"S":m.role==="Skeptic"?"R":m.role==="Builder"?"B":"C"}</span><b>${esc(m.role)}${synthesis?" · Final synthesis":""}</b><small>${synthesis?"CONCLUSION":"PERSPECTIVE"}</small></div><p>${esc(m.content)}</p></article>`}
-async function refresh(){try{const [projects,brain,agents,councils,activity,health]=await Promise.all([api("/api/projects"),api("/api/brain"),api("/api/agents"),api("/api/council"),api("/api/activity"),api("/api/health")]);Object.assign(state,{projects,brain,agents,councils,activity});$("#api-status").textContent="API connected · v"+health.version;$("#mode-label").textContent=health.model_configured?(health.model_name||"Model configured"):"Free-tier model supported";document.documentElement.dataset.modelConfigured=health.model_configured?"true":"false";$("#health-title").textContent=health.model_configured?(health.model_provider||"Model configured"):"Gemini setup needed";$("#system-status").dataset.state=health.model_configured?"ready":"missing";$("#composer-status").textContent=health.model_configured?((health.model_provider||"Model")+" · "+(health.model_name||"configured")+(health.storage_persistent?"":" · storage is temporary")):"Gemini Flash available · add a server-side GEMINI_API_KEY to enable AI";render();await refreshApprovals();}catch(e){$("#api-status").textContent="API unavailable";$("#health-title").textContent="Runtime unavailable";$("#mode-label").textContent="Health check failed";$("#system-status").dataset.state="missing";$("#composer-status").textContent="Runtime unavailable · retry later";toast(e.message)}}
-function render(){ $("#stat-projects").textContent=state.projects.length;$("#stat-brain").textContent=state.brain.length;$("#stat-agents").textContent=state.agents.length;$("#stat-councils").textContent=state.councils.length;$("#project-list").innerHTML=state.projects.slice(0,4).map(projectMarkup).join("")||'<div class="no-results">No projects yet.</div>';$("#control-project-list").innerHTML=state.projects.map(projectMarkup).join("")||'<div class="no-results">No projects yet.</div>';$("#activity-list").innerHTML=state.activity.slice(0,5).map(activityMarkup).join("")||'<div class="no-results">No activity yet.</div>';$("#security-activity").innerHTML=state.activity.map(activityMarkup).join("")||'<div class="no-results">No activity yet.</div>';$("#brain-count").textContent=state.brain.length+" ENTRIES";$("#brain-list").innerHTML=filteredBrain().map(brainMarkup).join("")||'<div class="no-results">No matching knowledge entries.</div>';$("#agent-grid").innerHTML=state.agents.map(agentMarkup).join("");$("#control-count").textContent=String(state.agents.length).padStart(2,"0");renderHistory();}
-function filteredBrain(){const q=$("#brain-search").value.toLowerCase(),kind=$("#brain-filter").value;return state.brain.filter(b=>(kind==="All"||b.kind===kind)&&[b.title,b.content,b.source].join(" ").toLowerCase().includes(q))}
-function renderHistory(){const host=$("#council-history");host.innerHTML=state.councils.map(c=>`<div class="history-row"><span class="round-icon">◎</span><div><b>${esc(c.topic)}</b><p>${esc(c.result)}</p></div><time>${date(c.created_at)}</time><button class="text-button" data-open-council="${esc(c.id)}">Open ↗</button></div>`).join("")||'<div class="no-results">No meetings yet. Start the first Council.</div>';$$("[data-open-council]").forEach(b=>b.addEventListener("click",()=>{const c=state.councils.find(x=>x.id===b.dataset.openCouncil);if(c)showCouncil(c)}));}
-function showCouncil(c){$("#transcript-title").textContent=c.topic;$("#transcript-subtitle").textContent="Saved session · "+date(c.created_at);$("#session-mode").textContent=c.mode==="live"?"LIVE MODEL":"DEMO MODE";$("#transcript").classList.remove("empty-state");$("#transcript").innerHTML=(c.transcript||[]).map(messageMarkup).join("");}
-function switchView(view){$$(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+view));$$(".nav-item").forEach(b=>b.classList.toggle("active",b.dataset.view===view));const names={overview:"New task",council:"Council",brain:"Brain",control:"Control",security:"Security"};const title=$("#task-title");if(title)title.textContent=names[view]||view;window.scrollTo({top:0,behavior:"smooth"});}
-$("[data-view]").forEach(b=>b.addEventListener("click",()=>switchView(b.dataset.view)));$("[data-go]").forEach(b=>b.addEventListener("click",()=>switchView(b.dataset.go)));
-$("#add-project").addEventListener("click",()=>$("#project-dialog").showModal());$("#control-add-project").addEventListener("click",()=>$("#project-dialog").showModal());
-$("#project-form").addEventListener("submit",async e=>{if(e.submitter?.value==="cancel")return;e.preventDefault();try{await api("/api/projects",{method:"POST",body:JSON.stringify({name:$("#project-name").value,description:$("#project-description").value})});$("#project-dialog").close();$("#project-form").reset();await refresh();toast("Project created");}catch(err){toast(err.message)}});
-$("#add-knowledge").addEventListener("click",()=>$("#brain-dialog").showModal());$("#knowledge-confidence").addEventListener("input",e=>$("#confidence-value").textContent=e.target.value);
-$("#brain-form").addEventListener("submit",async e=>{if(e.submitter?.value==="cancel")return;e.preventDefault();try{await api("/api/brain",{method:"POST",body:JSON.stringify({title:$("#knowledge-title").value,content:$("#knowledge-content").value,kind:$("#knowledge-kind").value,source:$("#knowledge-source").value,confidence:Number($("#knowledge-confidence").value)})});$("#brain-dialog").close();$("#brain-form").reset();$("#knowledge-confidence").value=80;$("#confidence-value").textContent="80";$("#knowledge-source").value="User input";await refresh();toast("Knowledge saved");}catch(err){toast(err.message)}});
-$("#brain-search").addEventListener("input",()=>{$("#brain-list").innerHTML=filteredBrain().map(brainMarkup).join("")||'<div class="no-results">No matching knowledge entries.</div>'});$("#brain-filter").addEventListener("change",()=>{$("#brain-list").innerHTML=filteredBrain().map(brainMarkup).join("")||'<div class="no-results">No matching knowledge entries.</div>'});
-$("#start-council").addEventListener("click",async()=>{const topic=$("#council-topic").value.trim();if(topic.length<3){toast("Enter a discussion topic first");$("#council-topic").focus();return}const roles=$$('input[type=checkbox][value]:checked').map(x=>x.value);const btn=$("#start-council");btn.disabled=true;btn.textContent="Council is discussing…";$("#transcript").classList.add("empty-state");$("#transcript").innerHTML='<h3>Perspectives are coming together.</h3><p>Waiting for the council to finish.</p>';try{const c=await api("/api/council",{method:"POST",body:JSON.stringify({topic,roles,rounds:1})});showCouncil(c);await refresh();showCouncil(c);toast("Council meeting completed");}catch(err){toast(err.message);$("#transcript").classList.add("empty-state")}finally{btn.disabled=false;btn.innerHTML='Start Council Meeting <span aria-hidden="true">→</span>'}});
-
-refresh();
-
-async function refreshApprovals(){
- try{
-  const approvals=await api("/api/security/approvals");
-  const host=$("#approval-list"); if(!host)return;
-  host.innerHTML=approvals.map(a=>`<div class="approval-row"><div class="approval-main"><b>${esc(a.action_type)}</b><p>${esc(a.description)}</p><small>Requested by ${esc(a.requested_by)} · ${esc(a.risk_level)} risk · ${date(a.created_at)}</small></div><span class="approval-state ${esc(a.status)}">${esc(a.status)}</span>${a.status==="pending"?`<div class="approval-buttons"><button class="btn secondary" data-decision="rejected" data-id="${esc(a.id)}">Reject</button><button class="btn primary" data-decision="approved" data-id="${esc(a.id)}">Approve</button></div>`:""}</div>`).join("")||'<div class="no-results">No approval requests yet.</div>';
-  $$("[data-decision]").forEach(b=>b.addEventListener("click",async()=>{b.disabled=true;try{await api("/api/security/approvals/"+b.dataset.id+"/decision",{method:"POST",body:JSON.stringify({decision:b.dataset.decision,decided_by:"workspace-owner",note:"Reviewed in CFA Security"})});await refreshApprovals();await refresh();toast("Approval decision recorded");}catch(e){toast(e.message);b.disabled=false}}));
- }catch(e){const host=$("#approval-list");if(host)host.innerHTML='<div class="no-results">Could not load approval queue.</div>';}
-}
-$("#refresh-approvals")?.addEventListener("click",refreshApprovals);
-$("#verify-audit")?.addEventListener("click",async()=>{try{const result=await api("/api/security/audit/verify");$("#audit-integrity").textContent=result.valid?"Integrity valid · "+result.checked+" events checked":"Integrity check failed at event "+result.failed_event_id;$("#audit-integrity").className="integrity-line "+(result.valid?"valid":"invalid");}catch(e){toast(e.message)}});
-
-
-// Workspace task composer and minimal blue CFA mascot.
-const workspaceForm = $("#workspace-form");
-const workspacePrompt = $("#workspace-prompt");
-const workspaceResponse = $("#workspace-response");
-const workspaceMascot = $("#workspace-mascot");
-function setMascotMode(mode) {
-  if (!workspaceMascot) return;
-  workspaceMascot.classList.toggle("is-looking", mode === "looking" || mode === "working");
-  workspaceMascot.classList.toggle("is-working", mode === "working");
-}
-workspacePrompt?.addEventListener("input", () => {
-  setMascotMode(workspacePrompt.value.trim() ? "looking" : "idle");
-});
-workspacePrompt?.addEventListener("focus", () => {
-  if (workspacePrompt.value.trim()) setMascotMode("looking");
-});
-workspacePrompt?.addEventListener("blur", () => {
-  if (!workspacePrompt.value.trim()) setMascotMode("idle");
-});
-$("#sidebar-new-task")?.addEventListener("click", () => {
-  switchView("overview");
-  workspacePrompt?.focus();
-  workspacePrompt?.scrollIntoView({behavior:"smooth",block:"center"});
-});
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-function renderRuntimeProgress(topic, run) {
-  const transcript = run?.state?.transcript || [];
-  const status = run?.status || "queued";
-  setMascotMode(["queued","running"].includes(status) ? "working" : "idle");
-  workspaceResponse.hidden = false;
-  workspaceResponse.innerHTML =
-    '<div class="workspace-response-head"><b>CFA Council</b><small>State: ' + esc(status) + '</small></div>' +
-    '<p class="workspace-user-prompt"></p>' +
-    '<div class="runtime-status" role="status" aria-live="polite">' +
-    esc(status === "completed" ? "Decision ready" : status === "failed" ? "Run failed" : "Council is working on the task") +
-    '</div>' +
-    transcript.map((message,index) => '<details class="workspace-answer" ' + (["completed","failed","cancelled"].includes(status) ? "" : "open") + '><summary><b>' +
-      esc(message.role) + '</b></summary><p>' + esc(message.content) + '</p></details>').join("") +
-    (status === "failed" ? '<p class="response-error"></p>' : "");
-  workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
-  if (status === "failed") workspaceResponse.querySelector(".response-error").textContent = run.error || "The run failed. Retry after checking runtime configuration.";
-}
-workspaceForm?.addEventListener("submit", async event => {
-  event.preventDefault();
-  const topic = workspacePrompt.value.trim();
-  if (topic.length < 3) {
-    toast("Add a little more detail before starting.");
-    workspacePrompt.focus();
-    return;
-  }
-  if (document.documentElement.dataset.modelConfigured !== "true") {
-    workspaceResponse.hidden = false;
-    workspaceResponse.innerHTML = '<div class="no-model-banner"><b>Enable the free-tier agent</b><p>Shewiun supports Google Gemini Flash. Add GEMINI_API_KEY as a server-side Vercel environment variable to enable model-backed Council runs. The key is never requested in this page or exposed to the browser.</p><p>Until configured, no model result will be fabricated.</p></div>';
-    workspaceResponse.scrollIntoView({behavior:"smooth",block:"nearest"});
-    return;
-  }
-  const send = $("#workspace-send");
-  send.disabled = true;
-  setMascotMode("working");
-  send.innerHTML = 'Working <span class="button-spinner" aria-hidden="true"></span>';
-  workspaceResponse.hidden = false;
-  workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="response-agent-dot is-animated" aria-hidden="true"><i></i><i></i></span><b>CFA Council</b><small>PREPARING</small></div><p class="workspace-user-prompt"></p><div class="workspace-answer"><p>Setting up the task and preparing the Council perspectives…</p></div>';
-  workspaceResponse.querySelector(".workspace-user-prompt").textContent = topic;
-  workspaceResponse.scrollIntoView({behavior:"smooth",block:"nearest"});
-  try {
-    const created = await api("/api/runtime/runs", {
-      method: "POST",
-      body: JSON.stringify({topic, roles:["Strategist","Skeptic","Builder"], rounds:1})
-    });
-    let run = null;
-    const deadline = Date.now() + 120000;
-    while (Date.now() < deadline) {
-      run = await api("/api/runtime/runs/" + encodeURIComponent(created.id));
-      renderRuntimeProgress(topic, run);
-      if (["completed", "failed", "cancelled"].includes(run.status)) break;
-      await wait(900);
-    }
-    if (!run || !["completed", "failed", "cancelled"].includes(run.status)) {
-      workspaceResponse.innerHTML += '<p class="response-error">This task is still running. Check CFA Council for its status shortly.</p>';
-      toast("Task continues in the background");
-      return;
-    }
-    if (run.status === "completed") {
-      workspacePrompt.value = "";
-      setMascotMode("idle");
-      await refresh();
-      toast("Recommendation ready");
-    } else if (run.status === "cancelled") {
-      toast("Task cancelled");
-    } else {
-      toast("Task failed");
-    }
-  } catch (error) {
-    setMascotMode("idle");
-    workspaceResponse.innerHTML = '<div class="workspace-response-head"><span class="response-agent-dot" aria-hidden="true"><i></i><i></i></span><b>Could not start task</b></div><p class="response-error"></p>';
-    workspaceResponse.querySelector(".response-error").textContent = error.message || "Unexpected error. Try again.";
-  } finally {
-    send.disabled = false;
-    send.innerHTML = 'Start Council <span aria-hidden="true">→</span>';
-    if (!workspacePrompt.value.trim()) setMascotMode("idle");
-  }
-});
-workspacePrompt?.addEventListener("keydown", event => {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    workspaceForm.requestSubmit();
-  }
-});
-
-
-
-// Phase 1 shell interactions: command palette, keyboard navigation, theme and truthful runtime status.
 (() => {
- const root=document.documentElement, shell=document.querySelector(".app-shell"), palette=$("#command-palette"), query=$("#palette-query");
- const storedTheme=localStorage.getItem("shewiun-theme");
- if(storedTheme==="dark"||storedTheme==="light")root.dataset.theme=storedTheme;
- const setTheme=()=>{const next=root.dataset.theme==="dark"?"light":"dark";root.dataset.theme=next;localStorage.setItem("shewiun-theme",next);};
- $("#theme-toggle")?.addEventListener("click",setTheme);
- const openPalette=()=>{if(!palette)return;palette.showModal();query.value="";filterPalette("");query.focus();};
- $("#open-command-palette")?.addEventListener("click",openPalette);
- $("#open-command-palette-top")?.addEventListener("click",openPalette);
- $("#top-menu")?.addEventListener("click",openPalette);
- function filterPalette(value){const q=value.toLowerCase();$$(".palette-items button").forEach(b=>b.hidden=!b.textContent.toLowerCase().includes(q));}
- query?.addEventListener("input",e=>filterPalette(e.target.value));
- $$(".palette-items button").forEach(b=>b.addEventListener("click",()=>{
-  const action=b.dataset.action;palette.close();
-  if(action==="new-task"){switchView("overview");$("#workspace-prompt")?.focus();}
-  if(action==="council")switchView("council");
-  if(action==="brain")switchView("brain");
-  if(action==="control")switchView("control");
-  if(action==="security")switchView("security");
-  if(action==="theme")setTheme();
-  if(action==="export")$("#export-current")?.click();
- }));
- $("#sidebar-new-task")?.addEventListener("click",()=>{switchView("overview");$("#workspace-prompt")?.focus();});
- document.addEventListener("keydown",e=>{
-  const mod=e.metaKey||e.ctrlKey;
-  if(mod&&e.key.toLowerCase()==="k"){e.preventDefault();openPalette();}
-  if(mod&&e.key.toLowerCase()==="b"){e.preventDefault();shell?.classList.toggle("sidebar-collapsed");}
-  if(mod&&e.shiftKey&&e.key.toLowerCase()==="o"){e.preventDefault();switchView("overview");$("#workspace-prompt")?.focus();}
-  if(e.key==="Escape"&&palette?.open)palette.close();
- });
- $$(".example-prompts [data-prompt]").forEach(b=>b.addEventListener("click",()=>{switchView("overview");const input=$("#workspace-prompt");input.value=b.dataset.prompt;input.focus();input.dispatchEvent(new Event("input",{bubbles:true}));}));
- $("#export-current")?.addEventListener("click",()=>{
-  const host=$("#workspace-response");if(!host||host.hidden||!host.textContent.trim()){toast("There is no result to export yet.");return;}
-  const blob=new Blob([host.innerText],{type:"text/markdown;charset=utf-8"}),url=URL.createObjectURL(blob),a=document.createElement("a");
-  a.href=url;a.download="shewiun-decision.md";a.click();URL.revokeObjectURL(url);
- });
- const prompt=$("#workspace-prompt");
- prompt?.addEventListener("input",()=>{prompt.style.height="auto";prompt.style.height=Math.min(prompt.scrollHeight,240)+"px";});
+  const root = document.getElementById('app');
+  const S = { view: 'chat', bots: [], bot: null, msgs: [], health: {}, drawer: false, draft: '', busy: false,
+    notes: [], note: null, q: '', status: '', graph: false, newNote: false, call: null, calls: [], approvals: [], audit: [], policies: [], verify: '', err: '' };
+  let token = sessionStorage.getItem('cfa_token') || '';
+
+  const h = (tag, a = {}, ...kids) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(a)) {
+      if (k === 'class') el.className = v; else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else if (v === true) el.setAttribute(k, ''); else if (v !== false && v != null) el.setAttribute(k, v);
+    }
+    for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid);
+    return el;
+  };
+  const btn = (t, f, cls = 'btn', extra = {}) => h('button', { class: cls, type: 'button', onclick: f, ...extra }, t);
+  const NS = 'http://www.w3.org/2000/svg';
+  function avatar(color, size = 40) {
+    const c = /^#[0-9a-f]{6}$/i.test(color) ? color : '#12294F';
+    const s = document.createElementNS(NS, 'svg'); s.setAttribute('width', size); s.setAttribute('height', size); s.setAttribute('viewBox', '0 0 40 40'); s.setAttribute('aria-hidden', 'true');
+    const add = (n, at) => { const e = document.createElementNS(NS, n); for (const k in at) e.setAttribute(k, at[k]); s.append(e); };
+    add('circle', { cx: 20, cy: 20, r: 20, fill: c }); add('circle', { cx: 14, cy: 17, r: 3.2, fill: '#F6F0E3' }); add('circle', { cx: 26, cy: 17, r: 3.2, fill: '#F6F0E3' });
+    return s;
+  }
+  const when = (t) => (t || '').slice(0, 16).replace('T', ' ');
+
+  async function api(path, opt = {}) {
+    const headers = { 'Content-Type': 'application/json' }; if (token) headers.Authorization = 'Bearer ' + token;
+    const r = await fetch(path, { method: opt.method || 'GET', headers, body: opt.body ? JSON.stringify(opt.body) : undefined });
+    if (r.status === 401) { token = prompt('Access token') || ''; sessionStorage.setItem('cfa_token', token); if (token) return api(path, opt); }
+    if (!r.ok) { let d = ''; try { d = (await r.json()).detail; } catch {} throw new Error(typeof d === 'string' && d ? d : `Request failed (${r.status})`); }
+    return r.json();
+  }
+  const run = async (f) => { S.err = ''; try { await f(); } catch (e) { S.err = e.message; } render(); };
+
+  async function go(view) {
+    S.view = view; S.drawer = false; S.err = '';
+    render();
+    await run(async () => {
+      if (view === 'brain') S.notes = await api('/api/brain/notes?' + new URLSearchParams({ q: S.q, status: S.status }));
+      if (view === 'council') S.calls = await api('/api/calls');
+      if (view === 'control') [S.approvals, S.audit, S.policies] = await Promise.all([api('/api/security/approvals'), api('/api/security/audit?limit=15').then((d) => d.events || d.items || d), api('/api/security/policies').then((d) => d.policies)]);
+    });
+  }
+  async function pick(id) {
+    S.bot = S.bots.find((b) => b.id === id); S.view = 'chat'; S.drawer = false;
+    await run(async () => { S.msgs = await api(`/api/bots/${id}/messages`); });
+  }
+  async function openNote(id) { S.view = 'brain'; S.drawer = false; await run(async () => { S.notes = await api('/api/brain/notes'); S.note = await api('/api/brain/notes/' + id); S.graph = false; }); }
+
+  async function send() {
+    const text = S.draft.trim(); if (!text || S.busy) return;
+    S.draft = ''; S.busy = true; S.msgs.push({ role: 'user', content: text }); render();
+    await run(async () => {
+      try { const r = await api(`/api/bots/${S.bot.id}/messages`, { method: 'POST', body: { content: text } }); S.msgs.push({ role: 'agent', content: r.reply, note: r.draft_note_id }); }
+      finally { S.busy = false; }
+    });
+  }
+
+  // ---------- views ----------
+  function chatView() {
+    const b = S.bot; if (!b) return h('div', { class: 'body' }, h('p', { class: 'empty muted' }, 'Choose an agent.'));
+    const ta = h('textarea', { rows: 1, placeholder: `Message ${b.name}`, 'aria-label': `Message ${b.name}` }); ta.value = S.draft;
+    ta.addEventListener('input', () => { S.draft = ta.value; sendBtn.disabled = !ta.value.trim() || S.busy; ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; });
+    ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+    const sendBtn = h('button', { class: 'send', type: 'button', 'aria-label': 'Send', disabled: !S.draft.trim() || S.busy, onclick: send }, '↑');
+    return h('div', { style: 'display:flex;flex-direction:column;min-height:0;flex:1' },
+      h('div', { class: 'bar' }, avatar(b.color, 32), h('h1', {}, `${b.name}`), h('span', { class: 'muted' }, b.role), h('span', { class: 'chip' }, b.model)),
+      h('div', { class: 'body', id: 'scroll', 'aria-live': 'polite' }, h('div', { class: 'col msgs' },
+        S.msgs.length ? S.msgs.map((m) => h('div', { class: 'msg ' + m.role }, m.content,
+          m.note ? h('small', {}, btn('Saved to Brain as draft', () => openNote(m.note), 'link')) : null))
+          : h('p', { class: 'empty muted' }, `Start a conversation with ${b.name}.`),
+        S.busy ? h('div', { class: 'msg agent muted' }, `${b.name} is answering…`) : null)),
+      h('div', { class: 'composer' }, h('div', { class: 'col' }, ta, sendBtn)));
+  }
+
+  const STANCE = { support: 'Support', oppose: 'Oppose', unsure: 'Unsure' };
+  function councilView() {
+    const topic = h('textarea', { class: 'field', rows: 3, placeholder: 'What should the agents decide? Include goal, constraints and what a good answer looks like.', maxlength: 2000 });
+    const picks = S.bots.filter((b) => b.id !== 'chair').map((b) => h('label', { class: 'row' }, h('input', { type: 'checkbox', value: b.id, checked: true }), b.name));
+    const rounds = h('select', { class: 'field', style: 'width:auto' }, [1, 2, 3].map((n) => h('option', { value: n }, `${n} discussion round${n > 1 ? 's' : ''}`)));
+    const start = btn('Start call', () => run(async () => {
+      const ids = picks.map((l) => l.firstChild).filter((i) => i.checked).map((i) => i.value);
+      S.call = 'running'; render();
+      try { S.call = await api('/api/calls', { method: 'POST', body: { topic: topic.value, bot_ids: ids, rounds: +rounds.value } }); S.calls = await api('/api/calls'); }
+      catch (e) { S.call = null; throw e; }
+    }), 'btn primary');
+    const c = S.call;
+    const result = c === 'running' ? h('p', { class: 'muted', role: 'status' }, 'The agents are in the call…') : c ? [
+      c.mode === 'demo' ? h('p', { class: 'chip warn' }, 'Demo mode: scripted text. No model is configured.') : null,
+      ...[...new Set(c.events.map((e) => e.round))].map((r) => [
+        h('div', { class: 'rnd' }, r === 0 ? 'Independent openings (no agent saw the others)' : `Discussion round ${r}`),
+        c.events.filter((e) => e.round === r).map((e) => h('div', { class: 'turn' }, avatar((S.bots.find((b) => b.id === e.bot_id) || {}).color, 32),
+          h('div', { class: 't' }, h('b', {}, e.name + ' '), h('span', { class: 'chip' }, STANCE[e.stance]), e.revised ? h('span', { class: 'chip ok' }, ' changed position') : null, h('div', {}, e.text))))]),
+      h('h2', {}, 'Disagreement map'),
+      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Agent'), ...(Object.values(c.map)[0] || []).map((_, i) => h('th', {}, i === 0 ? 'Opening' : `Round ${i}`)))),
+        h('tbody', {}, Object.entries(c.map).map(([n, st]) => h('tr', {}, h('td', {}, n), ...st.map((s) => h('td', {}, STANCE[s])))))),
+      h('h2', {}, 'Decision'), h('div', { class: 'notebody' }, c.decision),
+      h('p', { class: 'muted' }, 'Memory from this call is stored as drafts. ', btn('Review in Brain', () => openNote(c.draft_note_ids[0]), 'link'))] : null;
+    return h('div', { class: 'body' }, h('div', { class: 'col' },
+      h('h2', { style: 'margin-top:0' }, 'Council call'),
+      h('p', { class: 'muted' }, 'Agents answer independently first, then respond to each other and may change their position. Dissent stays in the record.'),
+      topic, h('div', { style: 'margin:10px 0' }, picks), h('div', { style: 'display:flex;gap:10px;align-items:center' }, rounds, start), result,
+      S.calls.length ? [h('h2', {}, 'Previous calls'), S.calls.map((x) => h('div', {}, btn(x.topic, () => run(async () => { S.call = await api('/api/calls/' + x.id); }), 'link'), h('span', { class: 'muted mono' }, ' ' + when(x.created_at) + ' ' + x.mode)))] : null));
+  }
+
+  function noteBody(n) {
+    const box = h('div', { class: 'notebody' });
+    n.body.split(/(\[\[[^\[\]]+\]\])/).forEach((part) => {
+      const m = part.match(/^\[\[(.+)\]\]$/); const t = m && S.notes.find((x) => x.title === m[1]);
+      box.append(t ? btn(m[1], () => openNote(t.id), 'link') : part);
+    });
+    return box;
+  }
+  function graphView() {
+    const el = h('div', { class: 'notebody' }); el.textContent = 'Loading graph…';
+    api('/api/brain/graph').then((g) => {
+      const W = 520, H = 380, cx = W / 2, cy = H / 2, R = 150, pos = {};
+      g.nodes.forEach((n, i) => { const a = (2 * Math.PI * i) / Math.max(g.nodes.length, 1); pos[n.id] = [cx + R * Math.cos(a), cy + R * Math.sin(a)]; });
+      const s = document.createElementNS(NS, 'svg'); s.setAttribute('viewBox', `0 0 ${W} ${H}`); s.setAttribute('width', '100%');
+      const add = (n, at, txt) => { const e = document.createElementNS(NS, n); for (const k in at) e.setAttribute(k, at[k]); if (txt) e.textContent = txt; s.append(e); return e; };
+      g.edges.forEach((e) => add('line', { x1: pos[e.from][0], y1: pos[e.from][1], x2: pos[e.to][0], y2: pos[e.to][1], stroke: 'currentColor', 'stroke-opacity': '.3' }));
+      g.nodes.forEach((n) => { const [x, y] = pos[n.id]; const c = add('circle', { cx: x, cy: y, r: 7, fill: n.status === 'verified' ? 'currentColor' : 'none', stroke: 'currentColor', style: 'cursor:pointer' });
+        c.addEventListener('click', () => openNote(n.id)); add('text', { x: x + 10, y: y + 4, 'font-size': 10, fill: 'currentColor' }, n.title.slice(0, 22)); });
+      el.replaceChildren(g.nodes.length ? s : 'No notes yet.', h('p', { class: 'muted' }, 'Filled circle = verified. Hollow = draft or rejected. Lines are [[links]].'));
+    }).catch((e) => { el.textContent = e.message; });
+    return el;
+  }
+  function brainView() {
+    const q = h('input', { class: 'field', placeholder: 'Search notes', value: S.q, 'aria-label': 'Search notes' });
+    q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { S.q = q.value; go('brain'); } });
+    const filt = ['', 'draft', 'verified'].map((s) => btn(s || 'All', () => { S.status = s; go('brain'); }, 'chip' + (S.status === s ? ' ok' : ''), { 'aria-pressed': S.status === s }));
+    const n = S.note;
+    let right;
+    if (S.newNote) {
+      const t = h('input', { class: 'field', placeholder: 'Title' }), b = h('textarea', { class: 'field', rows: 8, placeholder: 'Write in Markdown. Link with [[Other note]].' });
+      const k = h('select', { class: 'field', style: 'width:auto' }, ['note', 'fact', 'decision', 'rule', 'hypothesis'].map((x) => h('option', {}, x)));
+      right = h('div', {}, t, h('div', { style: 'height:8px' }), b, h('div', { style: 'display:flex;gap:8px;margin-top:8px' }, k, btn('Save note', () => run(async () => { const r = await api('/api/brain/notes', { method: 'POST', body: { title: t.value, body: b.value, kind: k.value } }); S.newNote = false; S.notes = await api('/api/brain/notes'); S.note = r; }), 'btn primary')));
+    } else if (S.graph) right = graphView();
+    else if (n) right = h('div', {}, h('h2', { style: 'margin-top:0' }, n.title),
+      h('p', {}, h('span', { class: 'chip' }, n.kind), ' ', h('span', { class: 'chip ' + (n.status === 'verified' ? 'ok' : n.status === 'rejected' ? 'warn' : '') }, n.status), h('span', { class: 'muted mono' }, ` by ${n.owner} · ${n.source}`)),
+      noteBody(n),
+      n.status === 'draft' ? h('p', { class: 'muted' }, 'Drafts are never used in agent prompts until an admin verifies them.') : null,
+      n.status === 'draft' ? h('div', { style: 'display:flex;gap:8px' }, ['verify', 'reject'].map((a) => btn(a === 'verify' ? 'Verify' : 'Reject', () => run(async () => { S.note = await api(`/api/brain/notes/${n.id}/${a}`, { method: 'POST' }); S.notes = await api('/api/brain/notes'); }), a === 'verify' ? 'btn primary' : 'btn'))) : null,
+      n.backlinks && n.backlinks.length ? [h('h2', {}, 'Linked from'), n.backlinks.map((t) => { const x = S.notes.find((y) => y.title === t); return h('div', {}, x ? btn(t, () => openNote(x.id), 'link') : t); })] : null);
+    else right = h('p', { class: 'muted' }, 'Select a note. Agent memory from chats and calls arrives here as drafts.');
+    return h('div', { class: 'body' }, h('div', { class: 'col', style: 'max-width:1000px' },
+      h('div', { style: 'display:flex;gap:8px;margin-bottom:14px' }, btn('New note', () => { S.newNote = true; S.graph = false; render(); }), btn(S.graph ? 'Notes' : 'Graph', () => { S.graph = !S.graph; S.newNote = false; render(); })),
+      h('div', { class: 'split' }, h('div', { class: 'list' }, q, h('div', { style: 'margin:8px 0;display:flex;gap:6px' }, filt),
+        S.notes.length ? S.notes.map((x) => h('button', { class: 'item', type: 'button', 'aria-current': n && n.id === x.id ? 'true' : false, onclick: () => openNote(x.id) }, x.title, h('small', { class: 'muted', style: 'display:block' }, `${x.kind} · ${x.status}`))) : h('p', { class: 'muted' }, 'No notes.')), right)));
+  }
+
+  function controlView() {
+    return h('div', { class: 'body' }, h('div', { class: 'col' },
+      h('h2', { style: 'margin-top:0' }, 'Approval queue'),
+      h('p', { class: 'muted' }, 'Approvals record a human decision. They do not execute tools.'),
+      S.approvals.filter((a) => a.status === 'pending').length ? S.approvals.filter((a) => a.status === 'pending').map((a) => h('div', { class: 'turn' }, h('div', { class: 't' }, h('b', {}, a.action_type), ` (${a.risk_level}): ${a.description}`,
+        h('div', { style: 'display:flex;gap:8px;margin-top:8px' }, ['approved', 'rejected'].map((d) => btn(d === 'approved' ? 'Approve' : 'Reject', () => run(async () => { await api(`/api/security/approvals/${a.id}/decision`, { method: 'POST', body: { decision: d, decided_by: 'ui' } }); await go('control'); }), 'btn')))))) : h('p', { class: 'muted' }, 'Nothing pending.'),
+      h('h2', {}, 'Policies'), h('table', {}, h('tbody', {}, (S.policies || []).map((p) => h('tr', {}, h('td', { class: 'mono' }, p.action_type), h('td', {}, p.decision))))),
+      h('h2', {}, 'Audit log'), btn('Verify integrity', () => run(async () => { const v = await api('/api/security/audit/verify'); S.verify = v.valid ? `Chain intact (${v.checked ?? v.events ?? '?'} events). This detects edits; it is not an external signature.` : 'Chain broken: ' + JSON.stringify(v); })),
+      S.verify ? h('p', { class: 'muted' }, S.verify) : null,
+      h('table', {}, h('tbody', {}, (Array.isArray(S.audit) ? S.audit : []).map((e) => h('tr', {}, h('td', { class: 'mono' }, when(e.created_at)), h('td', {}, e.event_type), h('td', {}, e.actor))))),
+      h('h2', {}, 'Playbooks'), h('a', { class: 'link', href: '/review/agent-launch' }, 'Agent launch review (go / no-go for an AI agent)')));
+  }
+
+  function drawer() {
+    const item = (label, view, extra) => h('button', { class: 'item', type: 'button', 'aria-current': S.view === view && !extra ? 'true' : false, onclick: () => (extra ? pick(extra) : go(view)) }, label);
+    return [h('div', { class: 'scrim', onclick: () => { S.drawer = false; render(); } }),
+      h('nav', { class: 'drawer', 'aria-label': 'Menu' },
+        h('div', { class: 'm-only' }, h('h3', {}, 'Agents'), S.bots.map((b) => item(b.name, 'chat', b.id))),
+        h('h3', {}, 'Council'), item('Start a call', 'council'),
+        h('h3', {}, 'Brain'), item('Notes and graph', 'brain'),
+        h('h3', {}, 'Control'), item('Approvals, policies, audit', 'control'))];
+  }
+
+  function render() {
+    const hd = S.health;
+    const side = h('aside', { class: 'side' },
+      h('div', { class: 'side-top' }, h('button', { class: 'ibtn', type: 'button', 'aria-label': 'Menu', 'aria-expanded': S.drawer, onclick: () => { S.drawer = !S.drawer; render(); } }, '☰'), h('span', { class: 'sp' }),
+        h('button', { class: 'ibtn', type: 'button', 'aria-label': 'Search notes', onclick: () => go('brain') }, '⌕'),
+        h('button', { class: 'ibtn', type: 'button', 'aria-label': 'New council call', onclick: () => { S.call = null; go('council'); } }, '+')),
+      h('div', { class: 'agents' }, S.bots.map((b) => h('button', { class: 'agent', type: 'button', 'aria-current': S.view === 'chat' && S.bot && S.bot.id === b.id ? 'true' : false, onclick: () => pick(b.id) },
+        avatar(b.color), h('span', {}, h('b', {}, `${b.name}`), h('small', {}, b.preview || b.role))))),
+      h('div', { class: 'side-foot' }, h('div', {}, hd.model_configured ? 'Model connected' : 'No model configured (demo mode)'), h('div', {}, hd.auth === 'enabled' ? 'Access token required' : 'Open dev mode: no authentication'), hd.storage_warning ? h('div', {}, 'Storage is temporary on this host') : null));
+    const view = { chat: chatView, council: councilView, brain: brainView, control: controlView }[S.view]();
+    root.replaceChildren(h('div', { class: 'shell' }, side, h('main', { class: 'main' }, S.err ? h('div', { class: 'banner', role: 'alert' }, S.err) : null, view)), ...(S.drawer ? drawer() : []));
+    const sc = document.getElementById('scroll'); if (sc) sc.scrollTop = sc.scrollHeight;
+  }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.drawer) { S.drawer = false; render(); } });
+
+  (async () => {
+    try { [S.health, S.bots] = await Promise.all([api('/api/health'), api('/api/bots')]); S.bot = S.bots[0]; S.msgs = await api(`/api/bots/${S.bot.id}/messages`); }
+    catch (e) { S.err = e.message; }
+    render();
+  })();
 })();

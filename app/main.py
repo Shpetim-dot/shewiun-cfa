@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import sqlite3
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,12 +12,12 @@ from uuid import uuid4
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .agent_launch_rules import evaluate_agent_launch
-from .agent_launch_runtime import create_review, get_review_by_token, init_review_tables
+from app.agent_launch import router as agent_launch_router
+from app import platform as cfa_platform
 
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
@@ -42,62 +41,8 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Shewiun CFA", version="0.2.0", description="Control & Focus Architecture")
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
-
-_RATE_BUCKETS: dict[str, list[float]] = {}
-_RATE_LIMIT_PATHS = {"/api/runtime/runs", "/api/council", "/api/review/agent-launch/assess"}
-
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    if request.url.path in _RATE_LIMIT_PATHS:
-        client_ip = request.client.host if request.client else "unknown"
-        bucket_key = request.url.path + ":" + client_ip
-        now_mono = time.monotonic()
-        hits = [stamp for stamp in _RATE_BUCKETS.get(bucket_key, []) if now_mono - stamp < 60]
-        if len(hits) >= 30:
-            return JSONResponse(status_code=429, content={"detail": "Rate limit reached. Wait one minute and retry."},
-                                headers={"Retry-After": "60"})
-        hits.append(now_mono)
-        _RATE_BUCKETS[bucket_key] = hits
-        if len(_RATE_BUCKETS) > 2000:
-            for key in list(_RATE_BUCKETS)[:500]:
-                if not _RATE_BUCKETS[key] or now_mono - _RATE_BUCKETS[key][-1] >= 60:
-                    _RATE_BUCKETS.pop(key, None)
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > 1_000_000:
-                return JSONResponse(status_code=413, content={"detail": "Request body too large."})
-        except ValueError:
-            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
-    response = await call_next(request)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
-    return response
-
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
-    return response
-
-
-def model_provider_configured() -> bool:
-    return bool(os.getenv("GEMINI_API_KEY") or (os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME")))
-
-
-def configured_model_name() -> str | None:
-    if os.getenv("GEMINI_API_KEY"):
-        return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    return os.getenv("CFA_MODEL_NAME") if os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME") else None
+app.include_router(agent_launch_router)
+cfa_platform.install(app)
 
 
 def now() -> str:
@@ -181,7 +126,6 @@ _runtime_worker_task: asyncio.Task | None = None
 async def startup() -> None:
     global _runtime_worker_task
     init_db()
-    init_review_tables(DB_PATH)
     # Single-process SQLite MVP: recover interrupted runs after restart.
     with connect() as db:
         db.execute("UPDATE runtime_runs SET status='queued', updated_at=?, error=NULL WHERE status='running'", (now(),))
@@ -258,14 +202,8 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "app": "Shewiun CFA",
         "version": "0.2.0",
-        "model_configured": model_provider_configured(),
-        "model_provider": "Google Gemini API" if os.getenv("GEMINI_API_KEY") else ("OpenAI-compatible" if os.getenv("CFA_MODEL_API_KEY") and os.getenv("CFA_MODEL_NAME") else None),
-        "model_name": configured_model_name(),
-        "free_agent_available": True,
-        "free_agent_name": "Gemini Flash (API key required; free-tier availability depends on Google account and current limits)",
-        "database": "sqlite",
-        "storage_persistent": not IS_VERCEL,
-        "queue": "in_process",
+        "model_configured": bool(os.getenv("CFA_MODEL_API_KEY")),
+        "auth": "enabled" if cfa_platform._keys() else "disabled",
         "storage": "ephemeral_sqlite" if IS_VERCEL else "sqlite",
         "storage_warning": (
             "Vercel /tmp storage is ephemeral; data may be lost between instances or deployments."
@@ -316,49 +254,32 @@ AGENTS = [
 
 @app.get("/api/agents")
 def list_agents() -> list[dict[str, str]]:
-    live = model_provider_configured()
-    return [{**a, "provider": configured_model_name() if live else "Not configured",
+    live = bool(os.getenv("CFA_MODEL_API_KEY"))
+    return [{**a, "provider": os.getenv("CFA_MODEL_NAME", "Configured model") if live else "Local demo",
              "status": "Connected" if live else "Demo mode"} for a in AGENTS]
 
 
 async def model_reply(role: str, topic: str, context: str) -> str | None:
+    key = os.getenv("CFA_MODEL_API_KEY")
+    if not key:
+        return None
+    base = os.getenv("CFA_MODEL_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    model = os.getenv("CFA_MODEL_NAME", "gpt-4o-mini")
     system = {
         "Strategist": "You are the Strategist in a multi-agent product council. Identify the opportunity, desired outcome, and priorities. Be concise.",
         "Skeptic": "You are the Skeptic in a multi-agent product council. Challenge assumptions, identify risks, and suggest mitigations. Be constructive.",
         "Builder": "You are the Builder in a multi-agent product council. Turn the discussion into practical steps, dependencies, and an MVP scope.",
         "Synthesizer": "You are the Council Synthesizer. Resolve disagreement, state the strongest shared conclusion, open questions, and next actions."
     }.get(role, f"You are the {role} in a product council. Be concise and specific.")
-    prompt = f"Topic: {topic}\\n\\nContext from previous speakers:\\n{context or '(first speaker)'}"
     async with httpx.AsyncClient(timeout=45) as client:
-        if os.getenv("GEMINI_API_KEY"):
-            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-            response = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                headers={"x-goog-api-key": os.getenv("GEMINI_API_KEY")},
-                json={"systemInstruction": {"parts": [{"text": system}]},
-                      "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                      "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1200}},
-            )
-            response.raise_for_status()
-            parts = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
-            answer = "\\n".join(p.get("text", "") for p in parts if p.get("text"))
-            if not answer.strip():
-                raise RuntimeError("Gemini returned no text content.")
-            return answer.strip()
-        key = os.getenv("CFA_MODEL_API_KEY")
-        model = os.getenv("CFA_MODEL_NAME")
-        if not key or not model:
-            return None
-        base = os.getenv("CFA_MODEL_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         response = await client.post(f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {key}"},
             json={"model": model, "messages": [{"role": "system", "content": system},
-                  {"role": "user", "content": prompt}], "temperature": 0.4, "max_tokens": 1200})
+                  {"role": "user", "content": f"Topic: {topic}\n\nContext from previous speakers:\n{context or '(first speaker)'}"}],
+                  "temperature": 0.5})
         response.raise_for_status()
-        answer = response.json()["choices"][0]["message"]["content"]
-        if not answer or not answer.strip():
-            raise RuntimeError("Configured model returned no text content.")
-        return answer.strip()
+        data = response.json()
+        return data["choices"][0]["message"]["content"].strip()
 
 
 def demo_reply(role: str, topic: str, context: str) -> str:
@@ -380,15 +301,13 @@ async def start_council(item: CouncilIn) -> dict[str, Any]:
         roles.append("Synthesizer")
     transcript: list[dict[str, str]] = []
     context = ""
-    live = model_provider_configured()
-    if not live:
-        raise HTTPException(status_code=503, detail="No model configured. Add GEMINI_API_KEY for the Gemini Flash integration, or set CFA_MODEL_API_KEY and CFA_MODEL_NAME.")
+    live = bool(os.getenv("CFA_MODEL_API_KEY"))
     try:
         for _ in range(item.rounds):
             for role in roles:
-                reply = await model_reply(role, item.topic, context)
-                if not reply:
-                    raise ValueError(f"The configured model returned no content for role {role}.")
+                reply = await model_reply(role, item.topic, context) if live else None
+                if reply is None:
+                    reply = demo_reply(role, item.topic, context)
                 transcript.append({"role": role, "content": reply})
                 context += f"\n{role}: {reply}"
     except (httpx.HTTPError, KeyError, ValueError) as exc:
@@ -524,7 +443,9 @@ def list_approvals(status: str | None = None) -> list[dict[str, Any]]:
 
 
 @app.post("/api/security/approvals/{approval_id}/decision")
-def decide_approval(approval_id: str, item: ApprovalDecisionIn) -> dict[str, Any]:
+def decide_approval(approval_id: str, item: ApprovalDecisionIn, request: Request) -> dict[str, Any]:
+    # The decider is the authenticated admin, never a name taken from the request body.
+    item.decided_by = cfa_platform.need_admin(request)["name"]
     with connect() as db:
         row = db.execute("SELECT * FROM approval_requests WHERE id=?", (approval_id,)).fetchone()
         if not row:
@@ -577,7 +498,7 @@ async def _execute_runtime_run(run_id: str) -> None:
     item = _runtime_run(row)
     request, state = item["input"], item["state"]
     roles, transcript = state["roles"], state["transcript"]
-    live = model_provider_configured()
+    live = bool(os.getenv("CFA_MODEL_API_KEY"))
     try:
         while state["next_index"] < len(roles):
             with connect() as db:
@@ -589,11 +510,9 @@ async def _execute_runtime_run(run_id: str) -> None:
                 return
             role = roles[state["next_index"]]
             context = "\n".join(f"{m['role']}: {m['content']}" for m in transcript)
-            if not live:
-                raise RuntimeError("No model configured. Add GEMINI_API_KEY for Gemini Flash or configure CFA_MODEL_API_KEY and CFA_MODEL_NAME.")
-            reply = await model_reply(role, request["topic"], context)
-            if not reply:
-                raise RuntimeError(f"The configured model returned no content for role {role}.")
+            reply = await model_reply(role, request["topic"], context) if live else None
+            if reply is None:
+                reply = demo_reply(role, request["topic"], context)
             transcript.append({"role": role, "content": reply, "step": state["next_index"]})
             state["next_index"] += 1
             state["transcript"] = transcript
@@ -656,8 +575,6 @@ class RuntimeCouncilIn(BaseModel):
 
 @app.post("/api/runtime/runs", status_code=202)
 def create_runtime_run(item: RuntimeCouncilIn) -> dict[str, Any]:
-    if not model_provider_configured():
-        raise HTTPException(status_code=503, detail="No model configured. Add GEMINI_API_KEY for Gemini Flash or configure CFA_MODEL_API_KEY and CFA_MODEL_NAME.")
     roles = [role for role in item.roles if role in {"Strategist", "Skeptic", "Builder"}]
     if not roles:
         roles = ["Strategist", "Skeptic", "Builder"]
@@ -719,49 +636,3 @@ def cancel_runtime_run(run_id: str) -> dict[str, Any]:
         db.execute("UPDATE runtime_runs SET cancel_requested=1,updated_at=? WHERE id=?", (now(), run_id))
     _runtime_event(run_id, "run.cancel_requested", {})
     return {"id": run_id, "status": "cancellation_requested"}
-
-
-
-# --- Public Agent Launch Review: deterministic Phase 1 assessment ---
-
-class AgentLaunchAssessmentIn(BaseModel):
-    answers: dict[str, Any] = Field()
-
-
-@app.get("/review/agent-launch")
-def agent_launch_review_page() -> FileResponse:
-    return FileResponse(STATIC / "agent-launch.html")
-
-
-@app.get("/review/agent-launch/result/{share_token}")
-def agent_launch_review_result_page(share_token: str) -> FileResponse:
-    # The random token is the capability for this private, read-only share URL.
-    # Result API returns 404 for unknown/revoked tokens; no public index exists.
-    return FileResponse(STATIC / "agent-launch.html", headers={"X-Robots-Tag": "noindex, nofollow"})
-
-
-@app.get("/api/review/agent-launch/result/{share_token}")
-def get_agent_launch_result(share_token: str) -> dict[str, Any]:
-    result = get_review_by_token(DB_PATH, share_token)
-    if result is None:
-        raise HTTPException(status_code=404, detail="Review not found or link revoked.")
-    return result
-
-
-@app.post("/api/review/agent-launch/assess")
-async def assess_agent_launch(item: AgentLaunchAssessmentIn) -> dict[str, Any]:
-    encoded = json.dumps(item.answers, ensure_ascii=False)
-    if len(encoded) > 20000:
-        raise HTTPException(status_code=413, detail="Answers exceed the 20 KB limit.")
-    try:
-        result = await create_review(DB_PATH, item.answers, allow_share=not IS_VERCEL)
-    except sqlite3.Error:
-        raise HTTPException(status_code=503, detail="Review storage is unavailable. Please try again later.")
-    if not result["model_configured"]:
-        result["assessment_type"] = "deterministic_self_assessment"
-    result["preliminary_status"] = result["deterministic"]["preliminary_status"]
-    result["findings"] = result["deterministic"]["findings"]
-    result["finding_count"] = result["deterministic"]["finding_count"]
-    result["note"] = ("Model-backed perspectives and synthesis completed." if result["model_configured"]
-                      else "No model was called. This is a deterministic self-assessment preview only.")
-    return result
