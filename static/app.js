@@ -27,7 +27,7 @@
   async function api(path, opt = {}) {
     const headers = { 'Content-Type': 'application/json' }; if (token) headers.Authorization = 'Bearer ' + token;
     const r = await fetch(path, { method: opt.method || 'GET', headers, body: opt.body ? JSON.stringify(opt.body) : undefined });
-    if (r.status === 401) { token = prompt('Access token') || ''; sessionStorage.setItem('cfa_token', token); if (token) return api(path, opt); }
+    if (r.status === 401) { token = prompt('Workspace access password') || ''; sessionStorage.setItem('cfa_token', token); if (token) return api(path, opt); }
     if (!r.ok) { let d = ''; try { d = (await r.json()).detail; } catch {} throw new Error(typeof d === 'string' && d ? d : `Request failed (${r.status})`); }
     return r.json();
   }
